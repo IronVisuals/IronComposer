@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IronComposer</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <div id="app">
+
+    <header id="toolbar">
+      <span id="logo">⚙ IronComposer</span>
+      <button id="btn-config" title="Configurar pasta raiz">☰</button>
+    </header>
+
+    <div id="search-bar">
+      <input
+        type="text"
+        id="search-input"
+        placeholder="Pesquisar arquivos..."
+        autocomplete="off"
+      />
+    </div>
+
+    <div id="body">
+
+      <nav id="sidebar">
+        <div id="folder-tree">
+          <p class="placeholder-text">Carregando pastas...</p>
+        </div>
+      </nav>
+
+      <main id="main-area">
+        <div id="file-list">
+          <p class="placeholder-text">
+            Selecione uma pasta na barra lateral.
+          </p>
+        </div>
+      </main>
+
+    </div><footer id="footer">
+      <div id="status-bar">
+        <span id="status-text">Pronto.</span>
+      </div>
+      <button id="btn-insert" disabled>
+        ▶ Inserir na Timeline
+      </button>
+    </footer>
+
+  </div><div id="modal-overlay" class="hidden">
+    <div id="modal">
+      <h2>Configurar Pasta Raiz</h2>
+      <p>Defina o caminho base onde suas mídias estão armazenadas.</p>
+      <label for="root-path-input">Caminho da pasta:</label>
+      <input
+        type="text"
+        id="root-path-input"
+        placeholder="Ex: G:\Minha Biblioteca de Midias"
+      />
+      <div class="modal-actions">
+        <button id="btn-cancel-config">Cancelar</button>
+        <button id="btn-save-config" class="primary">Salvar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="lib/CSInterface.js"></script>
+  <script src="js/main.js"></script>
+
+</body>
+</html>
