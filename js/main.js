@@ -1,62 +1,62 @@
 /**
  * main.js — Lógica do painel IronComposer
- *
- * ATENÇÃO: Este arquivo roda num ambiente HÍBRIDO.
- * Graças ao flag --enable-nodejs no manifest.xml, temos acesso
- * ao Node.js (módulo 'fs', 'path') E ao ambiente web (DOM)
- * ao mesmo tempo.
  */
 
 'use strict';
 
 // =====================================================
-// 1. SETUP INICIAL E BIBLIOTECAS
+// 1. SETUP INICIAL E DETECÇÃO DE AMBIENTE
 // =====================================================
 
-/**
- * csInterface é a nossa "ponte". É como se fosse uma API que chama 
- * funções nativas (semelhante ao JNI em Java para chamar C/C++).
- */
-const csInterface = new CSInterface();
+// Se window.__adobe_cep__ existir, estamos no Premiere. Senão, estamos no navegador (Mock Mode).
+const isCEP = typeof window.__adobe_cep__ !== 'undefined';
 
-/**
- * Importando módulos nativos do Node.js
- * 'fs' lê o disco. 'path' resolve barras invertidas e caminhos (Windows vs Mac).
- */
-const fs   = require('fs');
-const path = require('path');
+let csInterface = null;
+let fs = null;
+let path = null;
+
+if (isCEP) {
+  csInterface = new CSInterface();
+  fs = require('fs');
+  path = require('path');
+} else {
+  console.warn("⚠️ MODO BROWSER DETECTADO: Usando dados simulados (Mocks).");
+  // Criamos um 'path' fake básico só para o código não quebrar no navegador
+  path = {
+    join: (...args) => args.join('\\'),
+    basename: (p) => p.split('\\').pop(),
+    extname: (p) => {
+      const parts = p.split('.');
+      return parts.length > 1 ? '.' + parts.pop() : '';
+    }
+  };
+}
 
 // =====================================================
 // 2. CONFIGURAÇÃO BASE
 // =====================================================
 
-/**
- * __dirname é uma variável mágica do Node que pega o caminho absoluto
- * de onde este script está rodando. O ".." volta uma pasta.
- * Isso garante que o config.local.json seja lido do lugar certo sempre.
- */
-const CONFIG_FILE = path.join(__dirname, '..', 'config.local.json');
-const DEFAULT_ROOT = 'G:\\'; // Você pode mudar isso depois no modal da UI
+let CONFIG_FILE = '';
+if (isCEP) {
+  CONFIG_FILE = path.join(__dirname, '..', 'config.local.json');
+}
 
-// Usar Set (Hash Set em Java/C++) deixa a busca O(1) em vez de O(N) do Array
+const DEFAULT_ROOT = 'G:\\'; 
+
 const SUPPORTED_EXTENSIONS = new Set([
-  '.mp4', '.mov', '.avi', '.mkv', '.mxf', '.r3d', // Vídeo
-  '.wav', '.mp3', '.aac', '.aif', '.aiff', '.flac', // Áudio
-  '.jpg', '.jpeg', '.png', '.tiff', '.psd', '.ai',  // Imagem
-  '.mogrt',                                          // Motion Graphics
+  '.mp4', '.mov', '.avi', '.mkv', '.mxf', '.r3d', 
+  '.wav', '.mp3', '.aac', '.aif', '.aiff', '.flac', 
+  '.jpg', '.jpeg', '.png', '.tiff', '.psd', '.ai',  
+  '.mogrt',                                          
 ]);
 
 // =====================================================
-// 3. VARIÁVEIS DE ESTADO (Globais do nosso painel)
+// 3. VARIÁVEIS DE ESTADO E REFERÊNCIAS DO DOM
 // =====================================================
 
 let currentRootPath   = DEFAULT_ROOT; 
 let selectedFilePath  = null;          
 let allFilesInFolder  = [];            
-
-// =====================================================
-// 4. PONTEIROS PARA O DOM (Interface)
-// =====================================================
 
 const folderTree    = document.getElementById('folder-tree');
 const fileList      = document.getElementById('file-list');
@@ -70,10 +70,16 @@ const btnSaveConfig = document.getElementById('btn-save-config');
 const btnCancel     = document.getElementById('btn-cancel-config');
 
 // =====================================================
-// 5. FUNÇÕES DE CONFIGURAÇÃO (Lendo/Salvando o JSON)
+// 4. FUNÇÕES DE CONFIGURAÇÃO (Lendo/Salvando)
 // =====================================================
 
 function loadConfig() {
+  if (!isCEP) {
+    currentRootPath = DEFAULT_ROOT;
+    setStatus(`[Mock] Pasta raiz: ${currentRootPath}`);
+    return;
+  }
+
   try {
     if (fs.existsSync(CONFIG_FILE)) {
       const raw    = fs.readFileSync(CONFIG_FILE, 'utf8');
@@ -81,69 +87,30 @@ function loadConfig() {
       currentRootPath = config.rootPath || DEFAULT_ROOT;
     }
   } catch (err) {
-    console.error('[IronComposer] Erro ao carregar config:', err);
     currentRootPath = DEFAULT_ROOT;
   }
   setStatus(`Pasta raiz: ${currentRootPath}`);
 }
 
 function saveConfig(rootPath) {
+  currentRootPath = rootPath;
+  if (!isCEP) {
+    setStatus(`[Mock] Pasta raiz atualizada: ${rootPath}`);
+    return;
+  }
+
   try {
     const config = { rootPath };
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf8');
-    currentRootPath = rootPath;
     setStatus(`Pasta raiz atualizada: ${rootPath}`);
   } catch (err) {
-    setStatus(`ERRO ao salvar configuração: ${err.message}`);
+    setStatus(`ERRO ao salvar: ${err.message}`);
   }
 }
 
 // =====================================================
-// 6. LEITURA DE PASTAS E ARQUIVOS (Node.js fs)
+// 5. HELPER: ÍCONES E FORMATAÇÃO
 // =====================================================
-
-function loadFolders(rootPath) {
-  folderTree.innerHTML = '<p class="placeholder-text">Lendo pastas...</p>';
-
-  try {
-    if (!fs.existsSync(rootPath)) {
-      folderTree.innerHTML = `<p class="placeholder-text">Pasta não encontrada: ${rootPath}</p>`;
-      return;
-    }
-
-    // readdirSync lê tudo que está na pasta de forma síncrona (bloqueia a thread, igual no C)
-    const entries = fs.readdirSync(rootPath, { withFileTypes: true });
-
-    // Filtra para pegar apenas pastas (ignora arquivos soltos na raiz)
-    const folders = entries.filter(e => e.isDirectory());
-
-    if (folders.length === 0) {
-      folderTree.innerHTML = '<p class="placeholder-text">Nenhuma subpasta encontrada.</p>';
-      return;
-    }
-
-    folderTree.innerHTML = '';
-    folders.forEach(folder => {
-      const item = document.createElement('div');
-      item.className = 'folder-item';
-      item.innerHTML = `<span class="icon icon-folder">📁</span><span>${folder.name}</span>`;
-
-      // Evento de clique para carregar os arquivos daquela pasta
-      item.addEventListener('click', () => {
-        document.querySelectorAll('.folder-item').forEach(el => el.classList.remove('active'));
-        item.classList.add('active');
-
-        const folderPath = path.join(rootPath, folder.name);
-        loadFiles(folderPath);
-      });
-
-      folderTree.appendChild(item);
-    });
-
-  } catch (err) {
-    folderTree.innerHTML = `<p class="placeholder-text">Erro: ${err.message}</p>`;
-  }
-}
 
 function getFileIcon(ext) {
   const videoExts = new Set(['.mp4', '.mov', '.avi', '.mkv', '.mxf', '.r3d']);
@@ -165,43 +132,107 @@ function formatBytes(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 
-function loadFiles(folderPath) {
+// =====================================================
+// 6. LEITURA DE PASTAS E ARQUIVOS (Abstraída)
+// =====================================================
+
+function loadFolders(rootPath) {
+  folderTree.innerHTML = '<p class="placeholder-text">Lendo pastas...</p>';
+
+  let folders = [];
+
+  if (isCEP) {
+    try {
+      if (!fs.existsSync(rootPath)) {
+        folderTree.innerHTML = `<p class="placeholder-text">Pasta não encontrada: ${rootPath}</p>`;
+        return;
+      }
+      const entries = fs.readdirSync(rootPath, { withFileTypes: true });
+      folders = entries.filter(e => e.isDirectory()).map(e => e.name);
+    } catch (err) {
+      folderTree.innerHTML = `<p class="placeholder-text">Erro: ${err.message}</p>`;
+      return;
+    }
+  } else {
+    // MOCK DATA: Pastas fictícias para testar no navegador
+    folders = ['SFX_Impactos', 'Transicoes_Video', 'Lower_Thirds_Mogrt', 'Trilhas_Sonoras'];
+  }
+
+  if (folders.length === 0) {
+    folderTree.innerHTML = '<p class="placeholder-text">Nenhuma subpasta encontrada.</p>';
+    return;
+  }
+
+  folderTree.innerHTML = '';
+  folders.forEach(folderName => {
+    const item = document.createElement('div');
+    item.className = 'folder-item';
+    item.innerHTML = `<span class="icon icon-folder">📁</span><span>${folderName}</span>`;
+
+    item.addEventListener('click', () => {
+      document.querySelectorAll('.folder-item').forEach(el => el.classList.remove('active'));
+      item.classList.add('active');
+      const folderPath = path.join(rootPath, folderName);
+      loadFiles(folderPath, folderName);
+    });
+
+    folderTree.appendChild(item);
+  });
+}
+
+function loadFiles(folderPath, folderName = '') {
   fileList.innerHTML = '<p class="placeholder-text">Lendo arquivos...</p>';
   selectedFilePath = null;
   btnInsert.disabled = true;
 
-  try {
-    const entries = fs.readdirSync(folderPath, { withFileTypes: true });
-
-    allFilesInFolder = entries
-      .filter(e => {
-        if (!e.isFile()) return false;
-        const ext = path.extname(e.name).toLowerCase();
-        return SUPPORTED_EXTENSIONS.has(ext);
-      })
-      .map(e => {
-        const fullPath = path.join(folderPath, e.name);
-        const ext      = path.extname(e.name).toLowerCase();
-        let size       = 0;
-        try {
-          size = fs.statSync(fullPath).size; 
-        } catch (_) {}
-
-        return { name: e.name, fullPath, ext, size };
-      })
-      .sort((a, b) => a.name.localeCompare(b.name));
-
-    renderFileList(allFilesInFolder);
-    setStatus(`${allFilesInFolder.length} arquivo(s) encontrado(s).`);
-
-  } catch (err) {
-    fileList.innerHTML = `<p class="placeholder-text">Erro: ${err.message}</p>`;
+  if (isCEP) {
+    try {
+      const entries = fs.readdirSync(folderPath, { withFileTypes: true });
+      allFilesInFolder = entries
+        .filter(e => e.isFile() && SUPPORTED_EXTENSIONS.has(path.extname(e.name).toLowerCase()))
+        .map(e => {
+          const fullPath = path.join(folderPath, e.name);
+          let size = 0;
+          try { size = fs.statSync(fullPath).size; } catch (_) {}
+          return { name: e.name, fullPath, ext: path.extname(e.name).toLowerCase(), size };
+        })
+        .sort((a, b) => a.name.localeCompare(b.name));
+    } catch (err) {
+      fileList.innerHTML = `<p class="placeholder-text">Erro: ${err.message}</p>`;
+      return;
+    }
+  } else {
+    // MOCK DATA: Arquivos fictícios baseados na pasta clicada
+    allFilesInFolder = gerarArquivosMock(folderPath, folderName);
   }
+
+  renderFileList(allFilesInFolder);
+  setStatus(`${allFilesInFolder.length} arquivo(s) encontrado(s).`);
+}
+
+function gerarArquivosMock(folderPath, folderName) {
+  // Gera arquivos falsos dependendo da pasta que você clicou no navegador
+  if (folderName === 'SFX_Impactos') {
+    return [
+      { name: 'impacto_pesado_01.wav', fullPath: path.join(folderPath, 'impacto_pesado_01.wav'), ext: '.wav', size: 1540000 },
+      { name: 'whoosh_hit_02.wav', fullPath: path.join(folderPath, 'whoosh_hit_02.wav'), ext: '.wav', size: 850000 }
+    ];
+  } else if (folderName === 'Lower_Thirds_Mogrt') {
+    return [
+      { name: 'Nome_Entrevistado_Azul.mogrt', fullPath: path.join(folderPath, 'Nome_Entrevistado_Azul.mogrt'), ext: '.mogrt', size: 5540000 },
+      { name: 'Redes_Sociais_Pop.mogrt', fullPath: path.join(folderPath, 'Redes_Sociais_Pop.mogrt'), ext: '.mogrt', size: 3100000 }
+    ];
+  }
+  // Padrão
+  return [
+    { name: 'video_broll_01.mp4', fullPath: path.join(folderPath, 'video_broll_01.mp4'), ext: '.mp4', size: 45000000 },
+    { name: 'efeito_sonoro.mp3', fullPath: path.join(folderPath, 'efeito_sonoro.mp3'), ext: '.mp3', size: 3200000 }
+  ];
 }
 
 function renderFileList(files) {
   if (files.length === 0) {
-    fileList.innerHTML = '<p class="placeholder-text">Nenhum arquivo compatível nesta pasta.</p>';
+    fileList.innerHTML = '<p class="placeholder-text">Nenhum arquivo compatível.</p>';
     return;
   }
 
@@ -225,7 +256,6 @@ function renderFileList(files) {
       selectFile(item, file.fullPath);
       insertIntoTimeline();
     });
-
     fileList.appendChild(item);
   });
 }
@@ -260,17 +290,20 @@ searchInput.addEventListener('input', () => {
 function insertIntoTimeline() {
   if (!selectedFilePath) return;
 
-  // No Windows, caminhos têm barra invertida (\). Precisamos escapar (\\) 
-  // para que o ExtendScript do Premiere não interprete errado.
   const safePath = selectedFilePath.replace(/\\/g, '\\\\');
-
   setStatus(`Inserindo: ${path.basename(selectedFilePath)}...`);
   btnInsert.disabled = true;
 
-  // Montamos uma string que é examente o código que o Premiere vai rodar lá dentro
-  const script = `importAndInsert("${safePath}")`;
+  if (!isCEP) {
+    // Simula a demora de inserção no navegador
+    setTimeout(() => {
+      setStatus(`[Mock] ✓ Inserido na Timeline: ${path.basename(selectedFilePath)}`);
+      btnInsert.disabled = false;
+    }, 800);
+    return;
+  }
 
-  // evalScript manda a instrução para o ExtendScript (host.jsx) e aguarda o callback
+  const script = `importAndInsert("${safePath}")`;
   csInterface.evalScript(script, function(result) {
     btnInsert.disabled = false;
     try {
@@ -284,26 +317,22 @@ function insertIntoTimeline() {
 }
 
 // =====================================================
-// 9. EVENTOS DE CLIQUE DOS BOTÕES (Modal e Interface)
+// 9. EVENTOS DE CLIQUE DOS BOTÕES
 // =====================================================
 
 btnInsert.addEventListener('click', insertIntoTimeline);
-
 btnConfig.addEventListener('click', () => {
   rootPathInput.value = currentRootPath;
   modalOverlay.classList.remove('hidden');
   rootPathInput.focus();
 });
-
 btnCancel.addEventListener('click', () => modalOverlay.classList.add('hidden'));
 
 btnSaveConfig.addEventListener('click', () => {
   const newPath = rootPathInput.value.trim();
   if (!newPath) return;
-
   saveConfig(newPath);
   modalOverlay.classList.add('hidden');
-
   selectedFilePath = null;
   btnInsert.disabled = true;
   fileList.innerHTML = '<p class="placeholder-text">Selecione uma pasta.</p>';
