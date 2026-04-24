@@ -1,0 +1,36 @@
+# =============================================
+# IronComposer — .gitignore para Projeto CEP
+# =============================================
+
+# --- Arquivos temporários do Windows ---
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# --- Arquivos temporários do Adobe Premiere Pro ---
+*.prproj.bak
+*-AE Temp*
+Adobe Premiere Pro Auto-Save/
+Media Cache/
+Media Cache Files/
+*.cfa
+*.pek
+
+# --- Node.js ---
+node_modules/
+npm-debug.log*
+package-lock.json
+
+# --- IDEs e Editores ---
+.vscode/
+.idea/
+*.suo
+*.user
+
+# --- Logs de depuração do CEP ---
+*.log
+cep_cache/
+
+# --- Arquivos de configuração local (não subir pra nuvem!) ---
+config.local.json
