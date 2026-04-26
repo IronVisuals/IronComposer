@@ -1,61 +1,40 @@
 /**
- * main.js — Lógica do painel IronComposer
+ * main.js — Lógica do painel IronComposer (Blindado contra Crash)
  */
 
 'use strict';
 
 // =====================================================
-// 1. SETUP INICIAL E DETECÇÃO DE AMBIENTE
+// 1. SETUP INICIAL E VARIÁVEIS GLOBAIS
 // =====================================================
 
-// Se window.__adobe_cep__ existir, estamos no Premiere. Senão, estamos no navegador (Mock Mode).
+// Se window.__adobe_cep__ existir, estamos no Premiere.
 const isCEP = typeof window.__adobe_cep__ !== 'undefined';
 
-const fs = isCEP ? require('fs') : null;
-const path = isCEP ? require('path') : null;
+// Declaramos vazias para carregar apenas depois que a janela estiver segura
+let fs = null;
+let path = null;
 let csInterface = null;
 
-if (isCEP) {
-  csInterface = new CSInterface();
-} else {
-  console.warn("⚠️ MODO BROWSER DETECTADO: Usando dados simulados (Mocks).");
-  // Criamos um 'path' fake básico só para o código não quebrar no navegador
-  path = {
-    join: (...args) => args.join('\\'),
-    basename: (p) => p.split('\\').pop(),
-    extname: (p) => {
-      const parts = p.split('.');
-      return parts.length > 1 ? '.' + parts.pop() : '';
-    }
-  };
-}
-
-// =====================================================
-// 2. CONFIGURAÇÃO BASE
-// =====================================================
-
-let CONFIG_FILE = '';
-if (isCEP) {
-  CONFIG_FILE = path.join(__dirname, '..', 'config.local.json');
-}
-
 const DEFAULT_ROOT = 'G:\\'; 
+let CONFIG_FILE = '';
 
 const SUPPORTED_EXTENSIONS = new Set([
   '.mp4', '.mov', '.avi', '.mkv', '.mxf', '.r3d', 
   '.wav', '.mp3', '.aac', '.aif', '.aiff', '.flac', 
   '.jpg', '.jpeg', '.png', '.tiff', '.psd', '.ai',  
-  '.mogrt',                                          
+  '.mogrt',                                         
 ]);
 
 // =====================================================
-// 3. VARIÁVEIS DE ESTADO E REFERÊNCIAS DO DOM
+// 2. VARIÁVEIS DE ESTADO E REFERÊNCIAS DO DOM
 // =====================================================
 
 let currentRootPath   = DEFAULT_ROOT; 
 let selectedFilePath  = null;          
 let allFilesInFolder  = [];            
 
+// Referências do DOM (já podem ser mapeadas se o script estiver no final do body)
 const folderTree    = document.getElementById('folder-tree');
 const fileList      = document.getElementById('file-list');
 const statusText    = document.getElementById('status-text');
@@ -68,11 +47,71 @@ const btnSaveConfig = document.getElementById('btn-save-config');
 const btnCancel     = document.getElementById('btn-cancel-config');
 
 // =====================================================
-// 4. FUNÇÕES DE CONFIGURAÇÃO (Lendo/Salvando)
+// 3. INICIALIZAÇÃO BLINDADA (LAZY LOAD)
+// =====================================================
+
+// Só roda quando o navegador do Premiere já construiu todo o HTML
+window.onload = function() {
+  try {
+    if (isCEP) {
+      csInterface = new CSInterface();
+      
+      // Carrega o Node.js de forma assíncrona/tardia
+      if (typeof require !== 'undefined') {
+        fs = require('fs');
+        path = require('path');
+        CONFIG_FILE = path.join(__dirname, '..', 'config.local.json');
+        console.log("🟢 Node.js carregado com sucesso!");
+      }
+
+      // Aplica as cores nativas do Premiere para evitar o clarão branco
+      updateThemeWithAppSkinInfo(csInterface.hostEnvironment.appSkinInfo);
+      csInterface.addEventListener(CSInterface.THEME_COLOR_CHANGED_EVENT, onAppThemeColorChanged);
+
+    } else {
+      console.warn("⚠️ MODO BROWSER DETECTADO: Usando dados simulados (Mocks).");
+      path = {
+        join: (...args) => args.join('\\'),
+        basename: (p) => p.split('\\').pop(),
+        extname: (p) => {
+          const parts = p.split('.');
+          return parts.length > 1 ? '.' + parts.pop() : '';
+        }
+      };
+    }
+
+    // Inicia a lógica da sua aplicação
+    loadConfig();
+    loadFolders(currentRootPath);
+    setStatus('IronComposer carregado. Selecione uma pasta.');
+
+  } catch (error) {
+    console.error("Erro fatal na inicialização:", error);
+    setStatus('Erro ao carregar os módulos do sistema.');
+  }
+};
+
+// =====================================================
+// 4. FUNÇÕES DE TEMA DA ADOBE (Evita tela branca)
+// =====================================================
+
+function updateThemeWithAppSkinInfo(appSkinInfo) {
+    var themeColor = appSkinInfo.panelBackgroundColor.color;
+    var cssColor = "rgb(" + Math.round(themeColor.red) + "," + Math.round(themeColor.green) + "," + Math.round(themeColor.blue) + ")";
+    document.body.style.backgroundColor = cssColor;
+}
+
+function onAppThemeColorChanged(event) {
+    var skinInfo = JSON.parse(window.__adobe_cep__.getHostEnvironment()).appSkinInfo;
+    updateThemeWithAppSkinInfo(skinInfo);
+}
+
+// =====================================================
+// 5. FUNÇÕES DE CONFIGURAÇÃO (Lendo/Salvando)
 // =====================================================
 
 function loadConfig() {
-  if (!isCEP) {
+  if (!isCEP || !fs) {
     currentRootPath = DEFAULT_ROOT;
     setStatus(`[Mock] Pasta raiz: ${currentRootPath}`);
     return;
@@ -92,7 +131,7 @@ function loadConfig() {
 
 function saveConfig(rootPath) {
   currentRootPath = rootPath;
-  if (!isCEP) {
+  if (!isCEP || !fs) {
     setStatus(`[Mock] Pasta raiz atualizada: ${rootPath}`);
     return;
   }
@@ -107,7 +146,7 @@ function saveConfig(rootPath) {
 }
 
 // =====================================================
-// 5. HELPER: ÍCONES E FORMATAÇÃO
+// 6. HELPER: ÍCONES E FORMATAÇÃO
 // =====================================================
 
 function getFileIcon(ext) {
@@ -119,7 +158,7 @@ function getFileIcon(ext) {
   if (videoExts.has(ext))    return { icon: '▶', cls: 'icon-video'  };
   if (audioExts.has(ext))    return { icon: '♪', cls: 'icon-audio'  };
   if (imageExts.has(ext))    return { icon: '🖼', cls: 'icon-image'  };
-  return                     { icon: '•', cls: ''             };
+  return                     { icon: '•', cls: ''               };
 }
 
 function formatBytes(bytes) {
@@ -131,7 +170,7 @@ function formatBytes(bytes) {
 }
 
 // =====================================================
-// 6. LEITURA DE PASTAS E ARQUIVOS (Abstraída)
+// 7. LEITURA DE PASTAS E ARQUIVOS
 // =====================================================
 
 function loadFolders(rootPath) {
@@ -139,7 +178,7 @@ function loadFolders(rootPath) {
 
   let folders = [];
 
-  if (isCEP) {
+  if (isCEP && fs) {
     try {
       if (!fs.existsSync(rootPath)) {
         folderTree.innerHTML = `<p class="placeholder-text">Pasta não encontrada: ${rootPath}</p>`;
@@ -152,7 +191,6 @@ function loadFolders(rootPath) {
       return;
     }
   } else {
-    // MOCK DATA: Pastas fictícias para testar no navegador
     folders = ['SFX_Impactos', 'Transicoes_Video', 'Lower_Thirds_Mogrt', 'Trilhas_Sonoras'];
   }
 
@@ -183,7 +221,7 @@ function loadFiles(folderPath, folderName = '') {
   selectedFilePath = null;
   btnInsert.disabled = true;
 
-  if (isCEP) {
+  if (isCEP && fs) {
     try {
       const entries = fs.readdirSync(folderPath, { withFileTypes: true });
       allFilesInFolder = entries
@@ -200,7 +238,6 @@ function loadFiles(folderPath, folderName = '') {
       return;
     }
   } else {
-    // MOCK DATA: Arquivos fictícios baseados na pasta clicada
     allFilesInFolder = gerarArquivosMock(folderPath, folderName);
   }
 
@@ -209,7 +246,6 @@ function loadFiles(folderPath, folderName = '') {
 }
 
 function gerarArquivosMock(folderPath, folderName) {
-  // Gera arquivos falsos dependendo da pasta que você clicou no navegador
   if (folderName === 'SFX_Impactos') {
     return [
       { name: 'impacto_pesado_01.wav', fullPath: path.join(folderPath, 'impacto_pesado_01.wav'), ext: '.wav', size: 1540000 },
@@ -221,7 +257,6 @@ function gerarArquivosMock(folderPath, folderName) {
       { name: 'Redes_Sociais_Pop.mogrt', fullPath: path.join(folderPath, 'Redes_Sociais_Pop.mogrt'), ext: '.mogrt', size: 3100000 }
     ];
   }
-  // Padrão
   return [
     { name: 'video_broll_01.mp4', fullPath: path.join(folderPath, 'video_broll_01.mp4'), ext: '.mp4', size: 45000000 },
     { name: 'efeito_sonoro.mp3', fullPath: path.join(folderPath, 'efeito_sonoro.mp3'), ext: '.mp3', size: 3200000 }
@@ -267,7 +302,7 @@ function selectFile(itemEl, filePath) {
 }
 
 // =====================================================
-// 7. BARRA DE PESQUISA
+// 8. BARRA DE PESQUISA
 // =====================================================
 
 searchInput.addEventListener('input', () => {
@@ -282,7 +317,7 @@ searchInput.addEventListener('input', () => {
 });
 
 // =====================================================
-// 8. O MOTOR: COMUNICAÇÃO COM O PREMIERE
+// 9. O MOTOR: COMUNICAÇÃO COM O PREMIERE
 // =====================================================
 
 function insertIntoTimeline() {
@@ -292,8 +327,7 @@ function insertIntoTimeline() {
   setStatus(`Inserindo: ${path.basename(selectedFilePath)}...`);
   btnInsert.disabled = true;
 
-  if (!isCEP) {
-    // Simula a demora de inserção no navegador
+  if (!isCEP || !csInterface) {
     setTimeout(() => {
       setStatus(`[Mock] ✓ Inserido na Timeline: ${path.basename(selectedFilePath)}`);
       btnInsert.disabled = false;
@@ -315,7 +349,7 @@ function insertIntoTimeline() {
 }
 
 // =====================================================
-// 9. EVENTOS DE CLIQUE DOS BOTÕES
+// 10. EVENTOS DE CLIQUE DOS BOTÕES
 // =====================================================
 
 btnInsert.addEventListener('click', insertIntoTimeline);
@@ -345,20 +379,4 @@ rootPathInput.addEventListener('keydown', e => {
 function setStatus(msg) {
   statusText.textContent = msg;
   console.log('[IronComposer]', msg);
-}
-
-// =====================================================
-// 10. INICIALIZAÇÃO
-// =====================================================
-
-function init() {
-  loadConfig();
-  loadFolders(currentRootPath);
-  setStatus('IronComposer carregado. Selecione uma pasta.');
-}
-
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', init);
-} else {
-  init();
 }
