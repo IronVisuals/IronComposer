@@ -12,14 +12,14 @@
 
     <header id="toolbar">
       <span id="logo">⚙ IronComposer</span>
-      <button id="btn-config" title="Configurar pasta raiz">☰</button>
+      <button id="btn-add-folder" title="Adicionar Pasta" style="background: var(--accent); color: white; border: none; padding: 4px 8px; border-radius: 4px; font-size: 10px; cursor: pointer; font-weight: bold;">+ ADD FOLDER</button>
     </header>
 
     <div id="search-bar">
       <input
         type="text"
         id="search-input"
-        placeholder="Pesquisar arquivos..."
+        placeholder="Pesquisar em todas as pastas..."
         autocomplete="off"
       />
     </div>
@@ -28,14 +28,14 @@
 
       <nav id="sidebar">
         <div id="folder-tree">
-          <p class="placeholder-text">Carregando pastas...</p>
+          <p class="placeholder-text" style="padding: 10px; font-size: 9px;">Clique em + ADD FOLDER para começar.</p>
         </div>
       </nav>
 
       <main id="main-area">
         <div id="file-list">
           <p class="placeholder-text">
-            Selecione uma pasta na barra lateral.
+            Selecione uma pasta à esquerda.
           </p>
         </div>
       </main>
@@ -51,23 +51,6 @@
       </button>
     </footer>
 
-  </div>
-
-  <div id="modal-overlay" class="hidden">
-    <div id="modal">
-      <h2>Configurar Pasta Raiz</h2>
-      <p>Defina o caminho base onde suas mídias estão armazenadas.</p>
-      <label for="root-path-input">Caminho da pasta:</label>
-      <input
-        type="text"
-        id="root-path-input"
-        placeholder="Ex: G:\Minha Biblioteca de Midias"
-      />
-      <div class="modal-actions">
-        <button id="btn-cancel-config">Cancelar</button>
-        <button id="btn-save-config" class="primary">Salvar</button>
-      </div>
-    </div>
   </div>
 
   <script src="./lib/CSInterface.js"></script>
