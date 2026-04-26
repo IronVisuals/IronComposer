@@ -1,11 +1,11 @@
 /**
- * main.js — IronComposer (Versão Atalhos de Pastas)
+ * main.js — IronComposer (Versão com Subpastas)
  */
 
 'use strict';
 
 const isCEP = typeof window.__adobe_cep__ !== 'undefined';
-let fs = null, path = null, csInterface = null;
+let fs = null, pathModule = null, csInterface = null, shell = null;
 
 // Arquivo de configuração persistente
 let CONFIG_PATH = '';
@@ -33,10 +33,10 @@ window.onload = function() {
   if (isCEP) {
     csInterface = new CSInterface();
     fs = require('fs');
-    path = require('path');
+    pathModule = require('path');
     
     // Caminho para salvar as pastas do usuário (AppData/Roaming)
-    CONFIG_PATH = path.join(csInterface.getSystemPath(SystemPath.USER_DATA), 'ironcomposer_list.json');
+    CONFIG_PATH = pathModule.join(csInterface.getSystemPath(SystemPath.USER_DATA), 'ironcomposer_list.json');
 
     updateTheme(csInterface.hostEnvironment.appSkinInfo);
     loadSavedFolders();
@@ -58,11 +58,12 @@ function saveFolders() {
   } catch (e) { console.error("Erro ao salvar config", e); }
 }
 
-// Botão + ADD FOLDER (Explorer Nativo)
+// Botão + ADD FOLDER (Seletor de pasta nativo do CEP)
 btnAddFolder.onclick = function() {
   if (!isCEP) return;
   
-  // Abre o seletor de pastas nativo do Windows
+  // Abre o diálogo nativo de seleção de pasta do Windows
+  // O segundo parâmetro (true) indica que é para selecionar pasta, não arquivo
   const result = cep.fs.showOpenDialog(false, true, "Selecionar Pasta para o IronComposer");
   
   if (result.err === 0 && result.data.length > 0) {
@@ -76,6 +77,65 @@ btnAddFolder.onclick = function() {
   }
 };
 
+// Função recursiva para buscar arquivos em subpastas
+function getAllFilesRecursive(dirPath, maxDepth = 5, currentDepth = 0) {
+  let files = [];
+  
+  if (currentDepth > maxDepth) return files;
+  
+  try {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    
+    for (const entry of entries) {
+      const fullPath = pathModule.join(dirPath, entry.name);
+      
+      if (entry.isDirectory()) {
+        // É uma pasta - adiciona como pasta navegável
+        const subFiles = getAllFilesRecursive(fullPath, maxDepth, currentDepth + 1);
+        files = files.concat(subFiles);
+      } else if (entry.isFile()) {
+        const ext = pathModule.extname(entry.name).toLowerCase();
+        if (SUPPORTED_EXTENSIONS.has(ext)) {
+          const stats = fs.statSync(fullPath);
+          files.push({
+            name: entry.name,
+            fullPath: fullPath,
+            ext: ext,
+            size: stats.size,
+            relativePath: pathModule.relative(dirPath, fullPath)
+          });
+        }
+      }
+    }
+  } catch (e) {
+    console.error("Erro ao ler:", dirPath, e);
+  }
+  
+  return files;
+}
+
+// Função para obter subpastas de um diretório
+function getSubfolders(dirPath) {
+  let subfolders = [];
+  
+  try {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    
+    for (const entry of entries) {
+      if (entry.isDirectory() && !entry.name.startsWith('.')) {
+        subfolders.push({
+          name: entry.name,
+          fullPath: pathModule.join(dirPath, entry.name)
+        });
+      }
+    }
+  } catch (e) {
+    console.error("Erro ao ler subpastas:", dirPath, e);
+  }
+  
+  return subfolders.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 function renderFolderSidebar() {
   folderTree.innerHTML = '';
   if (myFolders.length === 0) {
@@ -84,13 +144,29 @@ function renderFolderSidebar() {
   }
 
   myFolders.forEach((folderPath, index) => {
-    const item = document.createElement('div');
-    item.className = 'folder-item';
     const folderName = folderPath.split(/[\\/]/).filter(Boolean).pop();
-    item.innerHTML = `<span class="icon-folder">📁</span> <span>${folderName}</span>`;
     
-    // Clique com o botão direito para remover
-    item.oncontextmenu = (e) => {
+    // Container da pasta principal
+    const folderContainer = document.createElement('div');
+    folderContainer.className = 'folder-group';
+    
+    // Item da pasta principal
+    const mainItem = document.createElement('div');
+    mainItem.className = 'folder-item main-folder';
+    mainItem.innerHTML = `<span class="icon-folder">📁</span> <span>${folderName}</span>`;
+    mainItem.dataset.path = folderPath;
+    mainItem.dataset.type = 'main';
+    
+    // Clique na pasta principal - mostra todos os arquivos das subpastas
+    mainItem.onclick = (e) => {
+      e.stopPropagation();
+      document.querySelectorAll('.folder-item').forEach(el => el.classList.remove('active'));
+      mainItem.classList.add('active');
+      loadFilesFromDir(folderPath, true); // true = recursivo
+    };
+    
+    // Botão direito para remover
+    mainItem.oncontextmenu = (e) => {
       e.preventDefault();
       if(confirm("Remover esta pasta do atalho?")) {
         myFolders.splice(index, 1);
@@ -98,28 +174,63 @@ function renderFolderSidebar() {
         renderFolderSidebar();
       }
     };
-
-    item.onclick = () => {
-      document.querySelectorAll('.folder-item').forEach(el => el.classList.remove('active'));
-      item.classList.add('active');
-      loadFilesFromDir(folderPath);
-    };
-    folderTree.appendChild(item);
+    
+    folderContainer.appendChild(mainItem);
+    
+    // Carrega subpastas e adiciona ao tree
+    const subfolders = getSubfolders(folderPath);
+    subfolders.forEach(sub => {
+      const subItem = document.createElement('div');
+      subItem.className = 'folder-item sub-folder';
+      subItem.style.paddingLeft = '25px';
+      subItem.innerHTML = `<span class="icon-folder">📂</span> <span>${sub.name}</span>`;
+      subItem.dataset.path = sub.fullPath;
+      subItem.dataset.type = 'sub';
+      
+      subItem.onclick = (e) => {
+        e.stopPropagation();
+        document.querySelectorAll('.folder-item').forEach(el => el.classList.remove('active'));
+        subItem.classList.add('active');
+        loadFilesFromDir(sub.fullPath, false); // false = não recursivo para subpastas
+      };
+      
+      folderContainer.appendChild(subItem);
+    });
+    
+    folderTree.appendChild(folderContainer);
   });
 }
 
-function loadFilesFromDir(dirPath) {
+function loadFilesFromDir(dirPath, recursive = false) {
   fileList.innerHTML = '<p class="placeholder-text">Lendo arquivos...</p>';
+  
   try {
-    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-    currentFolderFiles = entries
-      .filter(e => e.isFile() && SUPPORTED_EXTENSIONS.has(path.extname(e.name).toLowerCase()))
-      .map(e => {
-        const fullPath = path.join(dirPath, e.name);
-        const stats = fs.statSync(fullPath);
-        return { name: e.name, fullPath, ext: path.extname(e.name).toLowerCase(), size: stats.size };
-      });
-    renderFileList(currentFolderFiles);
+    let files;
+    
+    if (recursive) {
+      // Mode: mostra todos os arquivos de todas as subpastas
+      files = getAllFilesRecursive(dirPath);
+    } else {
+      // Mode: mostra apenas arquivos da pasta atual
+      const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+      files = entries
+        .filter(e => e.isFile() && SUPPORTED_EXTENSIONS.has(pathModule.extname(e.name).toLowerCase()))
+        .map(e => {
+          const fullPath = pathModule.join(dirPath, e.name);
+          const stats = fs.statSync(fullPath);
+          return { 
+            name: e.name, 
+            fullPath: fullPath, 
+            ext: pathModule.extname(e.name).toLowerCase(), 
+            size: stats.size,
+            relativePath: e.name
+          };
+        });
+    }
+    
+    currentFolderFiles = files;
+    renderFileList(files);
+    setStatus(`${files.length} arquivos encontrados.`);
   } catch (e) {
     fileList.innerHTML = `<p class="placeholder-text">Erro ao ler: ${e.message}</p>`;
   }
@@ -132,13 +243,22 @@ function renderFileList(files) {
     return;
   }
 
+  // Ícones por tipo de arquivo
+  const iconMap = {
+    '.mp4': '🎬', '.mov': '🎬', '.avi': '🎬', '.mkv': '🎬', '.mxf': '🎬', '.r3d': '🎬',
+    '.wav': '🎵', '.mp3': '🎵', '.aac': '🎵', '.aif': '🎵', '.aiff': '🎵', '.flac': '🎵',
+    '.jpg': '🖼️', '.jpeg': '🖼️', '.png': '🖼️', '.tiff': '🖼️', '.psd': '🎨', '.ai': '✏️',
+    '.mogrt': '📊'
+  };
+
   files.forEach(file => {
     const item = document.createElement('div');
     item.className = 'file-item';
+    const icon = iconMap[file.ext] || '📄';
     item.innerHTML = `
-      <div class="file-icon">📄</div>
+      <div class="file-icon">${icon}</div>
       <div class="file-info">
-        <div class="file-name">${file.name}</div>
+        <div class="file-name" title="${file.relativePath}">${file.name}</div>
         <div class="file-meta">${file.ext.toUpperCase()}</div>
       </div>
     `;
@@ -153,11 +273,25 @@ function renderFileList(files) {
   });
 }
 
-// Busca Instantânea
+// Busca Instantânea - pesquisa em todas as pastas adicionadas
 searchInput.oninput = function() {
   const query = searchInput.value.toLowerCase();
-  const filtered = currentFolderFiles.filter(f => f.name.toLowerCase().includes(query));
-  renderFileList(filtered);
+  
+  if (query.length < 2) {
+    // Se a busca estiver vazia, mostra o último estado
+    return;
+  }
+  
+  // Busca em todas as pastas
+  let allFiles = [];
+  myFolders.forEach(folder => {
+    const files = getAllFilesRecursive(folder);
+    const filtered = files.filter(f => f.name.toLowerCase().includes(query));
+    allFiles = allFiles.concat(filtered);
+  });
+  
+  renderFileList(allFiles);
+  setStatus(`${allFiles.length} arquivos encontrados para "${query}".`);
 };
 
 function insertIntoTimeline() {
