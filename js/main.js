@@ -58,24 +58,102 @@ function saveFolders() {
   } catch (e) { console.error("Erro ao salvar config", e); }
 }
 
-// Botão + ADD FOLDER (Seletor de pasta nativo do CEP)
+// Botão + ADD FOLDER (Seletor de pasta com atalhos rápidos)
 btnAddFolder.onclick = function() {
   if (!isCEP) return;
   
-  // Abre o diálogo nativo de seleção de pasta do Windows
-  // O segundo parâmetro (true) indica que é para selecionar pasta, não arquivo
-  const result = cep.fs.showOpenDialog(false, true, "Selecionar Pasta para o IronComposer");
+  // Cria um diálogo customizado com atalhos para pastas comuns
+  const userDataPath = csInterface.getSystemPath(SystemPath.USER_DATA);
+  const documentsPath = csInterface.getSystemPath(SystemPath.DOCUMENTS);
+  const videosPath = csInterface.getSystemPath(SystemPath.MY_DOCUMENTS);
   
-  if (result.err === 0 && result.data.length > 0) {
-    const newPath = result.data[0];
-    if (!myFolders.includes(newPath)) {
-      myFolders.push(newPath);
-      saveFolders();
-      renderFolderSidebar();
-      setStatus("Pasta adicionada com sucesso.");
+  // Monta o diálogo com atalhos
+  const dialogHtml = `
+    <div style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.8);display:flex;align-items:center;justify-content:center;z-index:1000;">
+      <div style="background:#252525;border:1px solid #3a3a3a;border-radius:8px;padding:20px;width:400px;">
+        <h3 style="color:#e0e0e0;margin:0 0 15px 0;">Selecionar Pasta</h3>
+        <p style="color:#999;font-size:12px;margin-bottom:15px;">Escolha uma pasta comum ou digite o caminho:</p>
+        
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:15px;">
+          <button onclick="selectQuickPath('${documentsPath.replace(/\\/g, '\\\\')}')" style="background:#2d2d2d;border:1px solid #3a3a3a;color:#e0e0e0;padding:10px;border-radius:4px;cursor:pointer;text-align:left;">
+            📁 Documentos
+          </button>
+          <button onclick="selectQuickPath('${userDataPath.replace(/\\/g, '\\\\')}')" style="background:#2d2d2d;border:1px solid #3a3a3a;color:#e0e0e0;padding:10px;border-radius:4px;cursor:pointer;text-align:left;">
+            📁 AppData
+          </button>
+          <button onclick="browseFolder()" style="background:#2d8ceb;border:none;color:#fff;padding:10px;border-radius:4px;cursor:pointer;grid-column:span 2;">
+            🔍 Procurar...
+          </button>
+        </div>
+        
+        <div style="margin-top:10px;">
+          <input type="text" id="custom-folder-path" placeholder="Ou digite o caminho aqui..." style="width:100%;background:#1e1e1e;border:1px solid #3a3a3a;color:#e0e0e0;padding:8px;border-radius:4px;">
+        </div>
+        
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:15px;">
+          <button onclick="closeFolderDialog()" style="background:#2d2d2d;border:1px solid #3a3a3a;color:#e0e0e0;padding:8px 16px;border-radius:4px;cursor:pointer;">Cancelar</button>
+          <button onclick="confirmFolderPath()" style="background:#2d8ceb;border:none;color:#fff;padding:8px 16px;border-radius:4px;cursor:pointer;">Adicionar</button>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  // Remove diálogos anteriores
+  const existing = document.getElementById('folder-dialog-overlay');
+  if (existing) existing.remove();
+  
+  // Cria o diálogo
+  const overlay = document.createElement('div');
+  overlay.id = 'folder-dialog-overlay';
+  overlay.innerHTML = dialogHtml;
+  document.body.appendChild(overlay);
+  
+  // Funções globais para o diálogo
+  window.selectQuickPath = function(path) {
+    addFolderFromPath(path);
+    closeFolderDialog();
+  };
+  
+  window.browseFolder = function() {
+    const result = cep.fs.showOpenDialog(false, true, "Selecionar Pasta");
+    if (result.err === 0 && result.data.length > 0) {
+      addFolderFromPath(result.data[0]);
+      closeFolderDialog();
     }
-  }
+  };
+  
+  window.confirmFolderPath = function() {
+    const input = document.getElementById('custom-folder-path');
+    if (input && input.value.trim()) {
+      addFolderFromPath(input.value.trim());
+      closeFolderDialog();
+    }
+  };
+  
+  window.closeFolderDialog = function() {
+    const dialog = document.getElementById('folder-dialog-overlay');
+    if (dialog) dialog.remove();
+  };
 };
+
+function addFolderFromPath(newPath) {
+  // Normaliza o caminho
+  newPath = newPath.replace(/\\/g, '/');
+  
+  if (!fs.existsSync(newPath)) {
+    setStatus("❌ Caminho não existe.");
+    return;
+  }
+  
+  if (!myFolders.includes(newPath)) {
+    myFolders.push(newPath);
+    saveFolders();
+    renderFolderSidebar();
+    setStatus("Pasta adicionada: " + newPath.split('/').pop());
+  } else {
+    setStatus("Pasta já adicionada.");
+  }
+}
 
 // Função recursiva para buscar arquivos em subpastas
 function getAllFilesRecursive(dirPath, maxDepth = 5, currentDepth = 0) {

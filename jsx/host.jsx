@@ -1,5 +1,5 @@
 /**
- * host.jsx — IronComposer (Versão com Inserção Protegida na Timeline)
+ * host.jsx — IronComposer (Versão com Inserção Inteligente na Timeline)
  */
 
 function importAndInsert(filePath) {
@@ -48,16 +48,98 @@ function importAndInsert(filePath) {
             var cti = sequence.getPlayerPosition();
             var isAudio = filePath.toLowerCase().match(/\.(wav|mp3|aac|aif|aiff|flac)$/);
             
-            // Determina qual trilha usar
-            var targetTrack = isAudio ? sequence.audioTracks[0] : sequence.videoTracks[0];
+            // Obtém a duração do clipe
+            var clipDuration = itemToInsert.duration.seconds;
             
-            // Usa insertClip que empurra os clipes existentes (não sobrescreve)
-            targetTrack.insertClip(itemToInsert, cti.seconds);
+            // Encontra a melhor trilha para inserção
+            var trackResult = findEmptyTrack(sequence, isAudio, cti.seconds, clipDuration);
+            
+            if (!trackResult.success) {
+                return "Erro: Nenhuma trilha vazia disponível.";
+            }
+            
+            // Insere na trilha encontrada
+            trackResult.track.insertClip(itemToInsert, trackResult.position);
             
             return "Sucesso";
         }
         return "Erro: Falha ao localizar item importado.";
     } catch (err) {
+        return "Erro: " + err.toString();
+    }
+}
+
+// Função para encontrar uma trilha vazia
+function findEmptyTrack(sequence, isAudio, ctiPosition, clipDuration) {
+    var tracks = isAudio ? sequence.audioTracks : sequence.videoTracks;
+    var numTracks = tracks.numItems;
+    
+    // Primeiro, verifica se a trilha principal tem espaço vazio
+    if (numTracks > 0) {
+        var mainTrack = tracks[0];
+        var result = checkTrackSpace(mainTrack, ctiPosition, clipDuration);
+        
+        if (result.hasSpace) {
+            return { success: true, track: mainTrack, position: ctiPosition };
+        }
+    }
+    
+    // Se não tem espaço na trilha principal, procura outras trilhas
+    for (var t = 0; t < numTracks; t++) {
+        var track = tracks[t];
+        
+        // Pula a trilha principal se já verificou
+        if (t === 0) continue;
+        
+        var result = checkTrackSpace(track, ctiPosition, clipDuration);
+        
+        if (result.hasSpace) {
+            return { success: true, track: track, position: ctiPosition };
+        }
+    }
+    
+    // Se nenhuma trilha tem espaço vazio, tenta inserir na primeira trilha disponível
+    // (isso vai empurrar os clipes existentes)
+    if (numTracks > 0) {
+        return { success: true, track: tracks[0], position: ctiPosition };
+    }
+    
+    return { success: false };
+}
+
+// Função para verificar se há espaço vazio na trilha
+function checkTrackSpace(track, position, clipDuration) {
+    try {
+        var clips = track.clips;
+        
+        // Se não há clipes, tem espaço
+        if (clips.numItems === 0) {
+            return { hasSpace: true };
+        }
+        
+        // Verifica cada clipe na trilha
+        for (var i = 0; i < clips.numItems; i++) {
+            var clip = clips[i];
+            var clipStart = clip.start.seconds;
+            var clipEnd = clip.end.seconds;
+            
+            // Verifica se o clipe a ser inserido sobrepõe algum clipe existente
+            var newEnd = position + clipDuration;
+            
+            if (position < clipEnd && newEnd > clipStart) {
+                // Há sobreposição - não pode inserir aqui
+                return { hasSpace: false, overlapping: true };
+            }
+        }
+        
+        // Não há sobreposição
+        return { hasSpace: true };
+        
+    } catch (e) {
+        // Em caso de erro, permite inserção
+        return { hasSpace: true };
+    }
+}
         return "Erro: " + err.toString();
     }
 }
