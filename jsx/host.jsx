@@ -19,7 +19,7 @@ function importAndInsert(filePath) {
                 break;
             }
         }
-        if (!bin) bin = app.project.createBin("IronComposer");
+        if (!bin) bin = app.project.rootItem.createBin("IronComposer");
 
         // 2. Importar
         app.project.importFiles([filePath], true, bin, false);
