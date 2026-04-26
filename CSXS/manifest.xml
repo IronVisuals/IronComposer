@@ -3,7 +3,7 @@
   ExtensionBundleId="com.henrique.ironcomposer"
   ExtensionBundleVersion="1.0.0"
   ExtensionBundleName="IronComposer"
-  Version="11.0">
+  Version="13.0">
 
   <ExtensionList>
     <Extension Id="com.henrique.ironcomposer.panel" Version="1.0.0"/>
@@ -19,7 +19,7 @@
     </LocaleList>
 
     <RequiredRuntimeList>
-      <RequiredRuntime Name="CSXS" Version="11.0"/>
+      <RequiredRuntime Name="CSXS" Version="13.0"/>
     </RequiredRuntimeList>
   </ExecutionEnvironment>
 
@@ -33,7 +33,6 @@
           <ScriptPath>./jsx/host.jsx</ScriptPath>
 
           <CEFCommandLine>
-            <Parameter>--enable-nodejs</Parameter>
             <Parameter>--mixed-context</Parameter>
           </CEFCommandLine>
         </Resources>
