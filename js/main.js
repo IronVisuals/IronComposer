@@ -11,22 +11,12 @@
 // Se window.__adobe_cep__ existir, estamos no Premiere. Senão, estamos no navegador (Mock Mode).
 const isCEP = typeof window.__adobe_cep__ !== 'undefined';
 
+const fs = isCEP ? require('fs') : null;
+const path = isCEP ? require('path') : null;
 let csInterface = null;
-let fs = null;
-let path = null;
 
 if (isCEP) {
   csInterface = new CSInterface();
-  // Tentar carregar módulos Node.js apenas se disponível
-  try {
-    fs = require('fs');
-    path = require('path');
-  } catch (e) {
-    console.warn("⚠️ Módulos Node.js não disponíveis no CEF.");
-    // Fallback: usar API CEP para operações de arquivo
-    fs = null;
-    path = null;
-  }
 } else {
   console.warn("⚠️ MODO BROWSER DETECTADO: Usando dados simulados (Mocks).");
   // Criamos um 'path' fake básico só para o código não quebrar no navegador
@@ -88,13 +78,6 @@ function loadConfig() {
     return;
   }
 
-  // Verificar se fs está disponível
-  if (!fs) {
-    currentRootPath = DEFAULT_ROOT;
-    setStatus("⚠️ Módulos Node.js indisponíveis. Use modo mock.");
-    return;
-  }
-
   try {
     if (fs.existsSync(CONFIG_FILE)) {
       const raw    = fs.readFileSync(CONFIG_FILE, 'utf8');
@@ -111,12 +94,6 @@ function saveConfig(rootPath) {
   currentRootPath = rootPath;
   if (!isCEP) {
     setStatus(`[Mock] Pasta raiz atualizada: ${rootPath}`);
-    return;
-  }
-
-  // Verificar se fs está disponível
-  if (!fs) {
-    setStatus("⚠️ Módulos Node.js indisponíveis.");
     return;
   }
 
@@ -163,11 +140,6 @@ function loadFolders(rootPath) {
   let folders = [];
 
   if (isCEP) {
-    // Verificar se fs está disponível
-    if (!fs) {
-      folderTree.innerHTML = '<p class="placeholder-text">⚠️ Módulos Node.js indisponíveis.</p>';
-      return;
-    }
     try {
       if (!fs.existsSync(rootPath)) {
         folderTree.innerHTML = `<p class="placeholder-text">Pasta não encontrada: ${rootPath}</p>`;
@@ -212,11 +184,6 @@ function loadFiles(folderPath, folderName = '') {
   btnInsert.disabled = true;
 
   if (isCEP) {
-    // Verificar se fs está disponível
-    if (!fs || !path) {
-      fileList.innerHTML = '<p class="placeholder-text">⚠️ Módulos Node.js indisponíveis.</p>';
-      return;
-    }
     try {
       const entries = fs.readdirSync(folderPath, { withFileTypes: true });
       allFilesInFolder = entries
@@ -331,13 +298,6 @@ function insertIntoTimeline() {
       setStatus(`[Mock] ✓ Inserido na Timeline: ${path.basename(selectedFilePath)}`);
       btnInsert.disabled = false;
     }, 800);
-    return;
-  }
-
-  // Verificar se csInterface está disponível
-  if (!csInterface) {
-    setStatus("✗ CSInterface não disponível.");
-    btnInsert.disabled = false;
     return;
   }
 
