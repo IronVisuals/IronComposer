@@ -1,41 +1,14 @@
-<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<ExtensionManifest
-  ExtensionBundleId="com.henrique.ironcomposer"
-  ExtensionBundleVersion="2.0.0"
-  ExtensionBundleName="IronComposer"
-  Version="11.0">
-
-  <ExtensionList>
-    <Extension Id="com.henrique.ironcomposer.panel" Version="2.0.0"/>
-  </ExtensionList>
-
-  <ExecutionEnvironment>
-    <HostList>
-      <!-- Premiere 2024 (v24) até versões futuras -->
-      <Host Name="PPRO" Version="[24.0,99.9]"/>
-    </HostList>
-    <LocaleList>
-      <Locale Code="All"/>
-    </LocaleList>
-    <RequiredRuntimeList>
-      <RequiredRuntime Name="CSXS" Version="11.0"/>
-    </RequiredRuntimeList>
-  </ExecutionEnvironment>
-
-  <DispatchInfoList>
-    <Extension Id="com.henrique.ironcomposer.panel" Version="2.0.0"/>
+<DispatchInfoList>
+    <!-- REMOVIDA A BARRA NO FINAL DESTA LINHA -->
+    <Extension Id="com.henrique.ironcomposer.panel" Version="2.0.0">
       <DispatchInfo>
         <Resources>
           <MainPath>./index.html</MainPath>
           <ScriptPath>./jsx/host.jsx</ScriptPath>
           <CEFCommandLine>
-            <!-- Habilita o módulo fs do Node.js dentro do painel -->
             <Parameter>--enable-nodejs</Parameter>
-            <!-- Permite acesso a APIs Node.js + DOM no mesmo contexto -->
             <Parameter>--mixed-context</Parameter>
-            <!-- Permite que o áudio toque sem interação prévia (preview automático) -->
             <Parameter>--autoplay-policy=no-user-gesture-required</Parameter>
-            <!-- Permite ler arquivos locais via file:// no Audio HTML5 -->
             <Parameter>--allow-file-access-from-files</Parameter>
             <Parameter>--disable-web-security</Parameter>
           </CEFCommandLine>
@@ -60,5 +33,3 @@
       </DispatchInfo>
     </Extension>
   </DispatchInfoList>
-
-</ExtensionManifest>
