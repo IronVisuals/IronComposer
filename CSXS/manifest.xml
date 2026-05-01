@@ -1,5 +1,27 @@
-<DispatchInfoList>
-    <!-- REMOVIDA A BARRA NO FINAL DESTA LINHA -->
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<ExtensionManifest
+  ExtensionBundleId="com.henrique.ironcomposer"
+  ExtensionBundleVersion="2.0.0"
+  ExtensionBundleName="IronComposer"
+  Version="11.0">
+
+  <ExtensionList>
+    <Extension Id="com.henrique.ironcomposer.panel" Version="2.0.0"/>
+  </ExtensionList>
+
+  <ExecutionEnvironment>
+    <HostList>
+      <Host Name="PPRO" Version="[24.0,99.9]"/>
+    </HostList>
+    <LocaleList>
+      <Locale Code="All"/>
+    </LocaleList>
+    <RequiredRuntimeList>
+      <RequiredRuntime Name="CSXS" Version="11.0"/>
+    </RequiredRuntimeList>
+  </ExecutionEnvironment>
+
+  <DispatchInfoList>
     <Extension Id="com.henrique.ironcomposer.panel" Version="2.0.0">
       <DispatchInfo>
         <Resources>
@@ -33,3 +55,4 @@
       </DispatchInfo>
     </Extension>
   </DispatchInfoList>
+</ExtensionManifest>
