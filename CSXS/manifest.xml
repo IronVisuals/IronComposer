@@ -23,7 +23,7 @@
   </ExecutionEnvironment>
 
   <DispatchInfoList>
-    <Extension Id="com.henrique.ironcomposer.panel">
+    <Extension Id="com.henrique.ironcomposer.panel" Version="2.0.0"/>
       <DispatchInfo>
         <Resources>
           <MainPath>./index.html</MainPath>
