@@ -3,7 +3,7 @@
   ExtensionBundleId="com.henrique.ironcomposer"
   ExtensionBundleVersion="2.0.0"
   ExtensionBundleName="IronComposer"
-  Version="12.0">
+  Version="11.0">
 
   <ExtensionList>
     <Extension Id="com.henrique.ironcomposer.panel" Version="2.0.0"/>
@@ -11,13 +11,14 @@
 
   <ExecutionEnvironment>
     <HostList>
-      <Host Name="PPRO" Version="[22.0,99.9]"/>
+      <!-- Premiere 2024 (v24) até versões futuras -->
+      <Host Name="PPRO" Version="[24.0,99.9]"/>
     </HostList>
     <LocaleList>
       <Locale Code="All"/>
     </LocaleList>
     <RequiredRuntimeList>
-      <RequiredRuntime Name="CSXS" Version="12.0"/>
+      <RequiredRuntime Name="CSXS" Version="11.0"/>
     </RequiredRuntimeList>
   </ExecutionEnvironment>
 
@@ -25,21 +26,23 @@
     <Extension Id="com.henrique.ironcomposer.panel">
       <DispatchInfo>
         <Resources>
-          <MainPath>index.html</MainPath>
-          <ScriptPath>jsx/host.jsx</ScriptPath>
+          <MainPath>./index.html</MainPath>
+          <ScriptPath>./jsx/host.jsx</ScriptPath>
           <CEFCommandLine>
+            <!-- Habilita o módulo fs do Node.js dentro do painel -->
             <Parameter>--enable-nodejs</Parameter>
+            <!-- Permite acesso a APIs Node.js + DOM no mesmo contexto -->
             <Parameter>--mixed-context</Parameter>
+            <!-- Permite que o áudio toque sem interação prévia (preview automático) -->
             <Parameter>--autoplay-policy=no-user-gesture-required</Parameter>
+            <!-- Permite ler arquivos locais via file:// no Audio HTML5 -->
             <Parameter>--allow-file-access-from-files</Parameter>
             <Parameter>--disable-web-security</Parameter>
           </CEFCommandLine>
         </Resources>
-
         <Lifecycle>
-          <AutoVisible>true</AutoVisible>
+          <AutoVisible>false</AutoVisible>
         </Lifecycle>
-
         <UI>
           <Type>Panel</Type>
           <Menu>IronComposer</Menu>
@@ -57,4 +60,5 @@
       </DispatchInfo>
     </Extension>
   </DispatchInfoList>
+
 </ExtensionManifest>
