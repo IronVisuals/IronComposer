@@ -2,123 +2,100 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>IronComposer</title>
   <link rel="stylesheet" href="./css/style.css">
 </head>
 <body>
 
+  <!-- TELA DE ERRO (visível se JS falhar) -->
+  <div id="error-screen" style="display:none; padding:16px; font-family:monospace; font-size:11px; color:#f85149; background:#1e1e1e; height:100vh;">
+    <strong>❌ Erro ao carregar IronComposer:</strong><br>
+    <span id="error-msg"></span><br><br>
+    Abra o Chrome em <strong>http://localhost:7778</strong> para ver o console completo.
+  </div>
+
+  <!-- APP PRINCIPAL -->
   <div id="app">
 
-    <!-- TOOLBAR -->
     <header id="toolbar">
       <span id="logo">⚙ IronComposer</span>
       <div class="toolbar-actions">
-        <button id="btn-add-folder" class="btn-toolbar" title="Adicionar pasta da biblioteca">
-          + Add Folder
-        </button>
+        <button id="btn-add-folder" class="btn-toolbar">+ Add Folder</button>
       </div>
     </header>
 
-    <!-- TABS -->
     <div id="tabs">
       <div class="tab active" data-tab="browse">Browse</div>
       <div class="tab" data-tab="favorites">★ Favoritos</div>
     </div>
 
-    <!-- SEARCH BAR -->
     <div id="search-bar">
-      <span class="search-icon">🔍</span>
-      <input
-        type="text"
-        id="search-input"
-        placeholder="Pesquisar arquivos em todas as pastas..."
-        autocomplete="off"
-        spellcheck="false"
-      />
-      <button class="search-clear" id="search-clear">✕</button>
+      <span style="color:#666;padding-left:4px;font-size:11px;">🔍</span>
+      <input type="text" id="search-input" placeholder="Pesquisar arquivos..." autocomplete="off" spellcheck="false"/>
+      <button id="search-clear" class="search-clear">✕</button>
     </div>
 
-    <!-- BODY: sidebar + área principal -->
     <div id="body">
 
-      <!-- SIDEBAR: árvore de pastas -->
       <nav id="sidebar">
         <div id="folder-tree">
-          <p class="placeholder-text">
-            Clique em <strong>+ Add Folder</strong><br>para começar.
-          </p>
+          <p class="placeholder-text">Clique em <strong>+ Add Folder</strong> para começar.</p>
         </div>
       </nav>
 
-      <!-- ÁREA PRINCIPAL: lista de arquivos + preview -->
       <main id="main-area">
-
         <div id="file-list-container">
           <div id="file-list">
             <p class="placeholder-text">Selecione uma pasta na barra lateral.</p>
           </div>
         </div>
 
-        <!-- PREVIEW DE ÁUDIO (oculto até clicar num áudio) -->
         <div id="audio-preview" class="hidden">
           <div class="preview-header">
             <span class="icon">🎵</span>
             <span class="preview-name" id="preview-name">—</span>
           </div>
-
           <div id="waveform-container">
             <canvas id="waveform-canvas"></canvas>
-            <div id="waveform-loading">Carregando áudio...</div>
+            <div id="waveform-loading">Carregando...</div>
             <div id="playhead"></div>
           </div>
-
           <div class="preview-controls">
-            <button class="btn-play" id="btn-play" title="Tocar/Pausar">▶</button>
+            <button class="btn-play" id="btn-play">▶</button>
             <span class="preview-time" id="preview-time">0:00 / 0:00</span>
             <div class="volume-control">
-              <span class="volume-icon" id="volume-icon" title="Mutar">🔊</span>
+              <span id="volume-icon" style="cursor:pointer;font-size:12px;color:#999;">🔊</span>
               <input type="range" id="volume-slider" min="0" max="100" value="80">
             </div>
           </div>
         </div>
 
       </main>
+    </div>
 
-    </div><!-- /body -->
-
-    <!-- FOOTER -->
     <footer id="footer">
-      <div id="status-bar">
-        <span id="status-text">Pronto.</span>
-      </div>
-      <button id="btn-insert" disabled>
-        ▶ Inserir na Timeline
-      </button>
+      <div id="status-bar"><span id="status-text">Iniciando...</span></div>
+      <button id="btn-insert" disabled>▶ Inserir na Timeline</button>
     </footer>
 
-  </div><!-- /app -->
-
-  <!-- TOAST (notificações) -->
-  <div id="toast"></div>
-
-  <!-- MODAL de confirmação -->
-  <div id="modal-overlay" class="hidden">
-    <div class="modal-box">
-      <h2 id="modal-title">Confirmar</h2>
-      <p id="modal-message">Mensagem aqui...</p>
-      <div class="modal-actions">
-        <button id="modal-cancel">Cancelar</button>
-        <button id="modal-confirm" class="primary">OK</button>
-      </div>
-    </div>
   </div>
 
-  <!-- SCRIPTS - ordem importa! -->
+  <div id="toast"></div>
+
+  <!--
+    APENAS 2 SCRIPTS — ordem obrigatória:
+    1. CSInterface.js  (biblioteca da Adobe)
+    2. main.js         (contém TUDO do IronComposer)
+  -->
   <script src="./lib/CSInterface.js"></script>
-  <script src="./js/storage.js"></script>
-  <script src="./js/audioPreview.js"></script>
-  <script src="./js/favorites.js"></script>
+  <script>
+    // Captura erros de carregamento antes do main.js
+    window.addEventListener('error', function(e) {
+      document.getElementById('app').style.display = 'none';
+      document.getElementById('error-screen').style.display = 'block';
+      document.getElementById('error-msg').textContent = e.message + ' (arquivo: ' + e.filename + ', linha: ' + e.lineno + ')';
+    });
+  </script>
   <script src="./js/main.js"></script>
 
 </body>
