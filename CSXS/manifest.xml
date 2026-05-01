@@ -11,8 +11,7 @@
 
   <ExecutionEnvironment>
     <HostList>
-      <!-- Premiere Pro 2025+ / 2026 usando CEP 12 -->
-      <Host Name="PPRO" Version="[25.0,99.9]"/>
+      <Host Name="PPRO" Version="[22.0,99.9]"/>
     </HostList>
     <LocaleList>
       <Locale Code="All"/>
@@ -26,23 +25,19 @@
     <Extension Id="com.henrique.ironcomposer.panel">
       <DispatchInfo>
         <Resources>
-          <MainPath>./index.html</MainPath>
-          <ScriptPath>./jsx/host.jsx</ScriptPath>
+          <MainPath>index.html</MainPath>
+          <ScriptPath>jsx/host.jsx</ScriptPath>
           <CEFCommandLine>
-            <!-- Habilita o módulo fs do Node.js dentro do painel -->
             <Parameter>--enable-nodejs</Parameter>
-            <!-- Permite acesso a APIs Node.js + DOM no mesmo contexto -->
             <Parameter>--mixed-context</Parameter>
-            <!-- Permite que o áudio toque sem interação prévia -->
             <Parameter>--autoplay-policy=no-user-gesture-required</Parameter>
-            <!-- Permite ler arquivos locais via file:// no Audio HTML5 -->
             <Parameter>--allow-file-access-from-files</Parameter>
             <Parameter>--disable-web-security</Parameter>
           </CEFCommandLine>
         </Resources>
 
         <Lifecycle>
-          <AutoVisible>false</AutoVisible>
+          <AutoVisible>true</AutoVisible>
         </Lifecycle>
 
         <UI>
@@ -62,5 +57,4 @@
       </DispatchInfo>
     </Extension>
   </DispatchInfoList>
-
 </ExtensionManifest>
