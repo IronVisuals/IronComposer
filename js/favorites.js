@@ -17,8 +17,15 @@ window.Favorites = (function() {
 
   let favoriteSet = new Set(); // usar Set é mais rápido pra checar (.has())
 
+  function getNodeRequire() {
+    if (typeof require === 'function') return require;
+    if (window.cep_node && typeof window.cep_node.require === 'function') return window.cep_node.require;
+    throw new Error('Node.js não está habilitado no CEP.');
+  }
+
+
   function init() {
-    const saved = window.Storage.get('favorites', []);
+    const saved = window.IronStorage.get('favorites', []);
     favoriteSet = new Set(saved);
     console.log('[Favorites] Carregados:', favoriteSet.size);
   }
@@ -52,7 +59,7 @@ window.Favorites = (function() {
    * Filtra os que ainda existem no disco (remove "fantasmas").
    */
   function list(filterByExisting = true) {
-    const fs = require('fs');
+    const fs = getNodeRequire()('fs');
     const items = Array.from(favoriteSet);
     if (!filterByExisting) return items;
 
@@ -69,7 +76,7 @@ window.Favorites = (function() {
   }
 
   function save() {
-    window.Storage.set('favorites', Array.from(favoriteSet));
+    window.IronStorage.set('favorites', Array.from(favoriteSet));
   }
 
   function clear() {

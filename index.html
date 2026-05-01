@@ -36,7 +36,7 @@
         autocomplete="off"
         spellcheck="false"
       />
-      <button class="search-clear" id="search-clear">✕</button>
+      <button class="search-clear" id="search-clear" title="Limpar busca">✕</button>
     </div>
 
     <!-- BODY: sidebar + área principal -->
@@ -60,7 +60,19 @@
           </div>
         </div>
 
-        <!-- PREVIEW DE ÁUDIO (oculto até clicar num áudio) -->
+        <!-- PREVIEW DE MÍDIA VISUAL (vídeo, imagem, MOGRT) -->
+        <div id="media-preview" class="hidden">
+          <div class="preview-header">
+            <span class="icon" id="media-preview-icon">▣</span>
+            <span class="preview-name" id="media-preview-name">—</span>
+          </div>
+          <div id="media-preview-body">
+            <p class="placeholder-text compact">Selecione uma mídia para preview.</p>
+          </div>
+          <div class="media-preview-meta" id="media-preview-meta">—</div>
+        </div>
+
+        <!-- PREVIEW DE ÁUDIO -->
         <div id="audio-preview" class="hidden">
           <div class="preview-header">
             <span class="icon">🎵</span>

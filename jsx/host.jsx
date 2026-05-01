@@ -1,251 +1,406 @@
 /**
- * host.jsx — IronComposer
- * Roda DENTRO do motor do Premiere Pro (ExtendScript ES3).
- * IMPORTANTE: Não use let, const, arrow functions. Use var e function.
- *
- * Fluxo da função importAndInsert:
- *   1. Valida projeto e sequência ativa
- *   2. Cria/acha o Bin "IronComposer" no Painel de Projeto
- *   3. Importa o arquivo no Bin (ou reusa se já existe)
- *   4. Encontra uma TRILHA VAZIA (sem clipes na região do CTI até CTI+duração)
- *   5. Insere com overwriteClip — seguro porque a trilha está vazia ali
+ * host.jsx — IronComposer v2.1
+ * Roda dentro do Premiere Pro / ExtendScript. Use ES3 apenas.
  */
 
-// ============================================================
-// FUNÇÃO PRINCIPAL (chamada pelo painel via evalScript)
-// ============================================================
 function importAndInsert(filePath) {
     try {
         if (!app.project) {
-            return JSON.stringify({success: false, error: "Nenhum projeto aberto."});
+            return makeResponse({success: false, error: "Nenhum projeto aberto."});
         }
 
         var sequence = app.project.activeSequence;
         if (!sequence) {
-            return JSON.stringify({success: false, error: "Nenhuma sequencia ativa. Abra ou crie uma timeline."});
+            return makeResponse({success: false, error: "Nenhuma sequencia ativa. Abra ou crie uma timeline."});
         }
 
         var fileObj = new File(filePath);
         if (!fileObj.exists) {
-            return JSON.stringify({success: false, error: "Arquivo nao existe no disco: " + filePath});
+            return makeResponse({success: false, error: "Arquivo nao existe no disco: " + filePath});
         }
 
-        // Salva preventivamente (proteção contra crashes)
-        try { app.project.save(); } catch (saveErr) { /* ignora */ }
+        var ext = getExtension(filePath);
+        var mediaKind = getMediaKind(ext);
+        if (mediaKind === "unknown") {
+            return makeResponse({success: false, error: "Tipo de arquivo nao suportado: " + ext});
+        }
 
-        // 1. Cria/acha Bin "IronComposer"
+        try { app.project.save(); } catch (saveErr) {}
+
+        var cti = sequence.getPlayerPosition();
+        var ctiSeconds = timeToSeconds(cti);
+        var ctiTicks = getTimeTicks(cti);
+        var clipDuration = 5;
+
         var bin = findOrCreateBin("IronComposer");
         if (!bin) {
-            return JSON.stringify({success: false, error: "Falha ao criar Bin IronComposer."});
+            return makeResponse({success: false, error: "Falha ao criar ou localizar o Bin IronComposer."});
         }
 
-        // 2. Verifica se item já existe no Bin (evita reimportar e duplicar)
-        var fileName = fileObj.name;
-        var fileNameNoExt = fileName.replace(/\.[^.]+$/, "");
-        var projectItem = findItemInBin(bin, fileName, fileNameNoExt);
+        if (mediaKind === "mogrt") {
+            var mgtDuration = 5;
+            var mgtPlacement = findSafePlacement(sequence, "mogrt", ctiSeconds, mgtDuration);
+            if (!mgtPlacement.success) return makeResponse(mgtPlacement);
 
-        // 3. Se não existe, importa
+            try {
+                var mgtItem = sequence.importMGT(fileObj.fsName, ctiTicks, mgtPlacement.videoTrackIndex, mgtPlacement.audioTrackIndex);
+                if (!mgtItem) {
+                    return makeResponse({success: false, error: "Premiere recusou inserir o MOGRT."});
+                }
+                return makeResponse({
+                    success: true,
+                    mediaKind: mediaKind,
+                    method: "importMGT",
+                    videoTrackIndex: mgtPlacement.videoTrackIndex,
+                    audioTrackIndex: mgtPlacement.audioTrackIndex,
+                    duration: mgtDuration
+                });
+            } catch (mgtErr) {
+                return makeResponse({success: false, error: "Falha ao inserir MOGRT: " + mgtErr.toString()});
+            }
+        }
+
+        var projectItem = findProjectItemByMediaPath(bin, fileObj.fsName);
         if (!projectItem) {
-            var imported = app.project.importFiles([filePath], true, bin, false);
+            var imported = app.project.importFiles([fileObj.fsName], true, bin, false);
             if (!imported) {
-                return JSON.stringify({success: false, error: "Premiere recusou importar o arquivo."});
+                return makeResponse({success: false, error: "Premiere recusou importar o arquivo para o Projeto."});
             }
 
-            // Pequena pausa para garantir que o item esteja disponível
-            $.sleep(150);
+            $.sleep(200);
+            projectItem = findProjectItemByMediaPath(bin, fileObj.fsName);
 
-            projectItem = findItemInBin(bin, fileName, fileNameNoExt);
-
-            // Fallback: pega o último item adicionado ao Bin
-            if (!projectItem && bin.children.numItems > 0) {
-                projectItem = bin.children[bin.children.numItems - 1];
+            if (!projectItem) {
+                projectItem = findProjectItemByName(bin, fileObj.name);
             }
         }
 
         if (!projectItem) {
-            return JSON.stringify({success: false, error: "Item importado mas nao localizado no Bin."});
+            return makeResponse({success: false, error: "Arquivo importado, mas nao localizado no Bin IronComposer."});
         }
 
-        // 4 + 5. Insere com lógica inteligente
-        return insertSmart(projectItem, sequence, filePath);
+        clipDuration = getClipDurationSeconds(projectItem, mediaKind);
+        if (clipDuration <= 0) clipDuration = mediaKind === "image" ? 5 : 1;
 
-    } catch (err) {
-        return JSON.stringify({success: false, error: "Excecao: " + err.toString()});
-    }
-}
+        var placement = findSafePlacement(sequence, mediaKind, ctiSeconds, clipDuration);
+        if (!placement.success) return makeResponse(placement);
 
-// ============================================================
-// FUNÇÃO: insertSmart — Insere protegendo a timeline existente
-// ============================================================
-function insertSmart(projectItem, sequence, filePath) {
-    try {
-        // Pega a posição da agulha (CTI - Current Time Indicator)
-        var cti = sequence.getPlayerPosition();
-        var ctiSeconds = cti.seconds;
+        var inserted = overwriteAtPlacement(sequence, projectItem, ctiSeconds, ctiTicks, placement);
+        if (!inserted.success) return makeResponse(inserted);
 
-        // Determina se é áudio
-        var ext = "";
-        var dotIdx = filePath.lastIndexOf(".");
-        if (dotIdx > -1) ext = filePath.substring(dotIdx).toLowerCase();
-        var isAudio = isAudioExtension(ext);
-
-        // Calcula duração do clipe
-        var clipDuration = getClipDurationSeconds(projectItem);
-        if (clipDuration <= 0) clipDuration = 5; // fallback de segurança
-
-        // Procura uma trilha que tenha ESPAÇO VAZIO entre CTI e CTI+duração
-        var tracks = isAudio ? sequence.audioTracks : sequence.videoTracks;
-        var emptyIdx = findEmptyTrackIndex(tracks, ctiSeconds, clipDuration);
-
-        if (emptyIdx === -1) {
-            // Todas as trilhas têm conflito — informa ao usuário
-            return JSON.stringify({
-                success: false,
-                error: "Todas as trilhas " + (isAudio ? "de audio" : "de video") +
-                       " tem clipes na posicao da agulha. Adicione uma nova trilha manualmente (botao direito > Adicionar trilha) e tente novamente."
-            });
-        }
-
-        // overwriteClip é seguro aqui porque confirmamos que a região está vazia
-        var targetTrack = tracks[emptyIdx];
-        targetTrack.overwriteClip(projectItem, ctiSeconds);
-
-        return JSON.stringify({
+        return makeResponse({
             success: true,
-            trackIndex: emptyIdx,
-            trackType: isAudio ? "audio" : "video",
+            mediaKind: mediaKind,
+            method: inserted.method,
+            videoTrackIndex: placement.videoTrackIndex,
+            audioTrackIndex: placement.audioTrackIndex,
             duration: clipDuration
         });
 
     } catch (err) {
-        return JSON.stringify({success: false, error: "Falha ao inserir: " + err.toString()});
+        return makeResponse({success: false, error: "Excecao no host.jsx: " + err.toString()});
     }
 }
 
-// ============================================================
-// HELPER: findOrCreateBin
-// ============================================================
-function findOrCreateBin(binName) {
-    var rootItem = app.project.rootItem;
-    for (var i = 0; i < rootItem.children.numItems; i++) {
-        var child = rootItem.children[i];
-        if (child.name === binName && child.type === 2) { // type 2 = Bin
-            return child;
+function overwriteAtPlacement(sequence, projectItem, ctiSeconds, ctiTicks, placement) {
+    var vIdx = placement.videoTrackIndex;
+    var aIdx = placement.audioTrackIndex;
+
+    // Preferimos Sequence.overwriteClip porque permite definir videoTrackIndex e audioTrackIndex.
+    try {
+        if (sequence.overwriteClip) {
+            var ok = sequence.overwriteClip(projectItem, ctiSeconds, vIdx < 0 ? 0 : vIdx, aIdx < 0 ? 0 : aIdx);
+            if (ok || typeof ok === "undefined") return {success: true, method: "sequence.overwriteClip.seconds"};
+        }
+    } catch (e1) {}
+
+    try {
+        if (sequence.overwriteClip) {
+            var okTicks = sequence.overwriteClip(projectItem, ctiTicks, vIdx < 0 ? 0 : vIdx, aIdx < 0 ? 0 : aIdx);
+            if (okTicks || typeof okTicks === "undefined") return {success: true, method: "sequence.overwriteClip.ticks"};
+        }
+    } catch (e2) {}
+
+    // Fallback para API Track.overwriteClip. Menos preciso, mas ainda respeita nossa checagem de faixa vazia.
+    try {
+        if (vIdx >= 0 && sequence.videoTracks && sequence.videoTracks.numTracks > vIdx) {
+            sequence.videoTracks[vIdx].overwriteClip(projectItem, ctiSeconds);
+            return {success: true, method: "track.video.overwriteClip.seconds"};
+        }
+        if (aIdx >= 0 && sequence.audioTracks && sequence.audioTracks.numTracks > aIdx) {
+            sequence.audioTracks[aIdx].overwriteClip(projectItem, ctiSeconds);
+            return {success: true, method: "track.audio.overwriteClip.seconds"};
+        }
+    } catch (e3) {
+        return {success: false, error: "Falha ao inserir na timeline: " + e3.toString()};
+    }
+
+    return {success: false, error: "Falha ao inserir: nenhum metodo de overwrite funcionou neste Premiere."};
+}
+
+function findSafePlacement(sequence, mediaKind, startSeconds, durationSeconds) {
+    if (durationSeconds <= 0) durationSeconds = 1;
+
+    var vTracks = sequence.videoTracks;
+    var aTracks = sequence.audioTracks;
+    var vCount = vTracks ? vTracks.numTracks : 0;
+    var aCount = aTracks ? aTracks.numTracks : 0;
+
+    if (mediaKind === "audio") {
+        if (aCount <= 0) return {success: false, error: "A sequencia nao tem trilhas de audio."};
+        for (var a = 0; a < aCount; a++) {
+            if (isTrackRegionEmpty(aTracks[a], startSeconds, durationSeconds)) {
+                return {success: true, videoTrackIndex: 0, audioTrackIndex: a};
+            }
+        }
+        return {success: false, error: "Nao ha trilha de audio vazia no intervalo da agulha. Adicione uma trilha de audio vazia ou mova a agulha."};
+    }
+
+    if (vCount <= 0) return {success: false, error: "A sequencia nao tem trilhas de video."};
+
+    if (mediaKind === "image") {
+        for (var vi = 0; vi < vCount; vi++) {
+            if (isTrackRegionEmpty(vTracks[vi], startSeconds, durationSeconds)) {
+                return {success: true, videoTrackIndex: vi, audioTrackIndex: aCount > 0 ? 0 : -1};
+            }
+        }
+        return {success: false, error: "Nao ha trilha de video vazia no intervalo da agulha. Adicione uma trilha de video vazia ou mova a agulha."};
+    }
+
+    // Video e MOGRT: escolhe par V/A livre para evitar sobrescrever audio linkado.
+    var maxPairs = Math.max(vCount, aCount);
+    for (var i = 0; i < maxPairs; i++) {
+        if (i < vCount && isTrackRegionEmpty(vTracks[i], startSeconds, durationSeconds)) {
+            if (aCount <= 0 || (i < aCount && isTrackRegionEmpty(aTracks[i], startSeconds, durationSeconds))) {
+                return {success: true, videoTrackIndex: i, audioTrackIndex: (aCount > 0 && i < aCount) ? i : 0};
+            }
         }
     }
+
+    // Fallback: qualquer V livre + qualquer A livre.
+    for (var v = 0; v < vCount; v++) {
+        if (!isTrackRegionEmpty(vTracks[v], startSeconds, durationSeconds)) continue;
+        if (aCount <= 0) return {success: true, videoTrackIndex: v, audioTrackIndex: -1};
+        for (var aa = 0; aa < aCount; aa++) {
+            if (isTrackRegionEmpty(aTracks[aa], startSeconds, durationSeconds)) {
+                return {success: true, videoTrackIndex: v, audioTrackIndex: aa};
+            }
+        }
+    }
+
+    return {success: false, error: "Nao encontrei um par de trilhas V/A vazio no intervalo da agulha. Para proteger sua timeline, nada foi inserido."};
+}
+
+function isTrackRegionEmpty(track, startSeconds, durationSeconds) {
+    if (!track) return false;
+
+    try {
+        if (track.isLocked && track.isLocked()) return false;
+    } catch (lockErr) {}
+
+    var endSeconds = startSeconds + durationSeconds;
+    var clips = track.clips;
+    if (!clips) return true;
+
+    for (var c = 0; c < clips.numItems; c++) {
+        var clip = clips[c];
+        var cStart = timeToSeconds(clip.start);
+        var cEnd = timeToSeconds(clip.end);
+        if (startSeconds < (cEnd - 0.001) && endSeconds > (cStart + 0.001)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function findOrCreateBin(binName) {
+    var rootItem = app.project.rootItem;
+    var existing = findBinByName(rootItem, binName);
+    if (existing) return existing;
     return rootItem.createBin(binName);
 }
 
-// ============================================================
-// HELPER: findItemInBin
-// ============================================================
-function findItemInBin(bin, fullName, nameNoExt) {
-    for (var i = 0; i < bin.children.numItems; i++) {
-        var n = bin.children[i].name;
-        if (n === fullName || n === nameNoExt) {
-            return bin.children[i];
+function findBinByName(parent, binName) {
+    if (!parent || !parent.children) return null;
+    for (var i = 0; i < parent.children.numItems; i++) {
+        var child = parent.children[i];
+        if (child.name === binName && isBin(child)) return child;
+    }
+    return null;
+}
+
+function isBin(item) {
+    try {
+        if (item.type === 2) return true;
+        if (typeof ProjectItemType !== "undefined" && item.type === ProjectItemType.BIN) return true;
+    } catch (e) {}
+    return false;
+}
+
+function findProjectItemByMediaPath(parent, mediaPath) {
+    var target = normalizePathForCompare(mediaPath);
+    if (!parent || !parent.children) return null;
+
+    for (var i = 0; i < parent.children.numItems; i++) {
+        var child = parent.children[i];
+        if (isBin(child)) {
+            var foundInBin = findProjectItemByMediaPath(child, mediaPath);
+            if (foundInBin) return foundInBin;
+        } else {
+            try {
+                if (child.getMediaPath) {
+                    var childPath = child.getMediaPath();
+                    if (normalizePathForCompare(childPath) === target) return child;
+                }
+            } catch (e) {}
         }
     }
     return null;
 }
 
-// ============================================================
-// HELPER: getClipDurationSeconds
-// Tenta múltiplas formas de obter a duração (compatibilidade)
-// ============================================================
-function getClipDurationSeconds(projectItem) {
+function findProjectItemByName(parent, fileName) {
+    var noExt = fileName.replace(/\.[^.]+$/, "");
+    if (!parent || !parent.children) return null;
+
+    for (var i = parent.children.numItems - 1; i >= 0; i--) {
+        var child = parent.children[i];
+        if (isBin(child)) {
+            var found = findProjectItemByName(child, fileName);
+            if (found) return found;
+        } else if (child.name === fileName || child.name === noExt) {
+            return child;
+        }
+    }
+    return null;
+}
+
+function getClipDurationSeconds(projectItem, mediaKind) {
+    if (mediaKind === "image") return 5;
+
     try {
         if (projectItem.getOutPoint && projectItem.getInPoint) {
             var inP = projectItem.getInPoint();
             var outP = projectItem.getOutPoint();
-            if (inP && outP) {
-                var dur = outP.seconds - inP.seconds;
-                if (dur > 0) return dur;
-            }
+            var dur = timeToSeconds(outP) - timeToSeconds(inP);
+            if (dur > 0) return dur;
         }
-    } catch (e) {}
+    } catch (e1) {}
 
     try {
-        if (projectItem.duration && projectItem.duration.seconds) {
-            return projectItem.duration.seconds;
+        if (projectItem.duration) {
+            var d = timeToSeconds(projectItem.duration);
+            if (d > 0) return d;
         }
-    } catch (e) {}
+    } catch (e2) {}
 
-    // Fallback: tenta pegar via metadata
     try {
         var meta = projectItem.getProjectMetadata();
         var match = meta.match(/<premierePrivateProjectMetaData:Column.Intrinsic.MediaDuration>([^<]+)/);
         if (match && match[1]) {
-            // Vem em formato HH:MM:SS:FF — converte
-            var parts = match[1].split(":");
-            if (parts.length >= 3) {
-                var h = parseFloat(parts[0]) || 0;
-                var m = parseFloat(parts[1]) || 0;
-                var s = parseFloat(parts[2]) || 0;
-                return (h * 3600) + (m * 60) + s;
-            }
+            var parsed = parseDurationText(match[1]);
+            if (parsed > 0) return parsed;
         }
-    } catch (e) {}
+    } catch (e3) {}
 
-    return 5; // default 5 segundos
+    return mediaKind === "audio" ? 1 : 5;
 }
 
-// ============================================================
-// HELPER: isAudioExtension
-// ============================================================
-function isAudioExtension(ext) {
-    var audioExts = [".wav", ".mp3", ".aac", ".aif", ".aiff", ".flac", ".ogg", ".m4a"];
-    for (var i = 0; i < audioExts.length; i++) {
-        if (audioExts[i] === ext) return true;
+function parseDurationText(value) {
+    if (!value) return 0;
+    var parts = String(value).split(":");
+    if (parts.length >= 3) {
+        var h = parseFloat(parts[0]) || 0;
+        var m = parseFloat(parts[1]) || 0;
+        var s = parseFloat(parts[2]) || 0;
+        return (h * 3600) + (m * 60) + s;
+    }
+    var n = parseFloat(value);
+    return isNaN(n) ? 0 : n;
+}
+
+function getExtension(filePath) {
+    var dot = filePath.lastIndexOf(".");
+    if (dot < 0) return "";
+    return filePath.substring(dot).toLowerCase();
+}
+
+function getMediaKind(ext) {
+    if (isInArray(ext, [".wav", ".mp3", ".aac", ".aif", ".aiff", ".flac", ".ogg", ".m4a", ".wma"])) return "audio";
+    if (isInArray(ext, [".mp4", ".mov", ".avi", ".mkv", ".mxf", ".r3d", ".webm", ".m4v", ".mpg", ".mpeg", ".mts", ".m2ts"])) return "video";
+    if (isInArray(ext, [".jpg", ".jpeg", ".png", ".tiff", ".tif", ".psd", ".ai", ".gif", ".bmp", ".webp", ".heic"])) return "image";
+    if (ext === ".mogrt") return "mogrt";
+    return "unknown";
+}
+
+function isInArray(value, arr) {
+    for (var i = 0; i < arr.length; i++) {
+        if (arr[i] === value) return true;
     }
     return false;
 }
 
-// ============================================================
-// HELPER: findEmptyTrackIndex
-// Retorna o índice da PRIMEIRA trilha que está vazia
-// na região [startTime, startTime + duration].
-// Retorna -1 se nenhuma trilha tem espaço.
-// ============================================================
-function findEmptyTrackIndex(tracks, startTime, duration) {
-    var endTime = startTime + duration;
-    var numTracks = tracks.numTracks;
+function timeToSeconds(t) {
+    try {
+        if (t && typeof t.seconds !== "undefined") return Number(t.seconds);
+    } catch (e1) {}
+    var n = Number(t);
+    if (!isNaN(n)) return n;
+    return 0;
+}
 
-    for (var t = 0; t < numTracks; t++) {
-        var track = tracks[t];
+function getTimeTicks(t) {
+    try {
+        if (t && typeof t.ticks !== "undefined") return String(t.ticks);
+    } catch (e1) {}
+    return String(timeToSeconds(t));
+}
 
-        // Pula trilhas bloqueadas (locked)
-        try {
-            if (track.isLocked && track.isLocked()) continue;
-        } catch (e) {}
+function normalizePathForCompare(p) {
+    return String(p || "").replace(/\\/g, "/").replace(/^file:\/\/\//i, "").toLowerCase();
+}
 
-        var clips = track.clips;
-        var hasOverlap = false;
-
-        for (var c = 0; c < clips.numItems; c++) {
-            var clip = clips[c];
-            var cStart = clip.start.seconds;
-            var cEnd = clip.end.seconds;
-
-            // Sobreposição: o intervalo [startTime,endTime] cruza [cStart,cEnd]
-            // Pequena tolerância de 0.001s para evitar erros de ponto flutuante
-            if (startTime < (cEnd - 0.001) && endTime > (cStart + 0.001)) {
-                hasOverlap = true;
-                break;
-            }
-        }
-
-        if (!hasOverlap) return t;
+function selectFolderDialog(title) {
+    try {
+        var folder = Folder.selectDialog(title || "Selecionar pasta de midias");
+        if (!folder) return "__CANCELLED__";
+        return folder.fsName;
+    } catch (e) {
+        return "__CANCELLED__";
     }
-
-    return -1; // Nenhuma trilha vazia
 }
 
-// ============================================================
-// FUNÇÃO AUXILIAR: ping (teste de conexão com o painel)
-// ============================================================
 function ping() {
-    return JSON.stringify({success: true, message: "IronComposer host.jsx esta vivo"});
+    return makeResponse({success: true, message: "IronComposer host.jsx esta vivo"});
 }
 
-$.writeln("[IronComposer] host.jsx carregado.");
+function makeResponse(obj) {
+    try {
+        if (typeof JSON !== "undefined" && JSON.stringify) return JSON.stringify(obj);
+    } catch (e) {}
+
+    var parts = [];
+    for (var key in obj) {
+        if (obj.hasOwnProperty(key)) {
+            parts.push('"' + jsonEscape(key) + '":' + jsonValue(obj[key]));
+        }
+    }
+    return "{" + parts.join(",") + "}";
+}
+
+function jsonValue(value) {
+    if (typeof value === "number") return isFinite(value) ? String(value) : "0";
+    if (typeof value === "boolean") return value ? "true" : "false";
+    if (value === null || typeof value === "undefined") return "null";
+    return '"' + jsonEscape(String(value)) + '"';
+}
+
+function jsonEscape(str) {
+    return String(str)
+        .replace(/\\/g, "\\\\")
+        .replace(/"/g, "\\\"")
+        .replace(/\r/g, "\\r")
+        .replace(/\n/g, "\\n")
+        .replace(/\t/g, "\\t");
+}
+
+$.writeln("[IronComposer] host.jsx v2.1 carregado.");

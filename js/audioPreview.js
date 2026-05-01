@@ -1,49 +1,36 @@
 /**
- * audioPreview.js — Player de áudio com waveform
- *
- * Como funciona:
- *   1. Quando o usuário clica num arquivo de áudio, chamamos load(filePath)
- *   2. Usamos Node fs.readFileSync para ler o arquivo (já que estamos no CEP)
- *   3. Convertemos os bytes para AudioBuffer via Web Audio API
- *   4. Desenhamos a waveform num <canvas>
- *   5. O <audio> HTML5 toca o arquivo via file:// URL
- *
- * Recursos:
- *   - Play/pause
- *   - Volume com slider e mute
- *   - Click/drag na waveform pra mudar a posição
- *   - Reprodução automática ao selecionar áudio
+ * audioPreview.js — IronComposer v2.1
+ * Player de áudio com waveform, autoplay e proteção contra arquivos muito grandes.
  */
 
 'use strict';
 
 window.AudioPreview = (function() {
+  var fs = null;
+  var audioContext = null;
+  var audioElement = null;
+  var currentPeaks = null;
+  var currentFilePath = null;
+  var isMuted = false;
+  var lastVolume = 0.8;
+  var loadToken = 0;
 
-  // ===== Estado =====
-  let fs = null;
-  let audioContext = null;
-  let audioElement = null;       // <audio> HTML5
-  let currentBuffer = null;      // AudioBuffer decodificado (pra desenhar)
-  let currentFilePath = null;
-  let isPlaying = false;
-  let isMuted = false;
-  let lastVolume = 0.8;
+  var previewPanel, container, canvas, ctx, loading, playhead;
+  var btnPlay, timeLabel, volumeSlider, volumeIcon, nameLabel;
 
-  // ===== DOM refs =====
-  let container, canvas, ctx, loading, playhead;
-  let btnPlay, timeLabel, volumeSlider, volumeIcon, nameLabel;
-  let previewPanel;
+  var COLOR_WAVE = '#4fa3f7';
+  var COLOR_WAVE_PLAYED = '#2d8ceb';
+  var COLOR_BG = '#2b2b2b';
+  var MAX_WAVEFORM_BYTES = 180 * 1024 * 1024; // evita travar/crashar com músicas enormes
 
-  // ===== Cores da waveform (CSS vars) =====
-  const COLOR_WAVE = '#4fa3f7';
-  const COLOR_WAVE_PLAYED = '#2d8ceb';
-  const COLOR_BG = '#2b2b2b';
+  function getNodeRequire() {
+    if (typeof require === 'function') return require;
+    if (window.cep_node && typeof window.cep_node.require === 'function') return window.cep_node.require;
+    throw new Error('Node.js não está habilitado no CEP.');
+  }
 
-  /**
-   * Inicializa o módulo. Chamar uma vez ao carregar o painel.
-   */
   function init() {
-    fs = require('fs');
+    fs = getNodeRequire()('fs');
 
     previewPanel = document.getElementById('audio-preview');
     container    = document.getElementById('waveform-container');
@@ -57,11 +44,10 @@ window.AudioPreview = (function() {
     volumeIcon   = document.getElementById('volume-icon');
     nameLabel    = document.getElementById('preview-name');
 
-    // <audio> HTML5 oculto que toca o arquivo
     audioElement = new Audio();
     audioElement.preload = 'auto';
+    audioElement.volume = lastVolume;
 
-    // AudioContext só será criado quando precisar (após interação)
     setupEventListeners();
     setupAudioElementEvents();
   }
@@ -69,184 +55,285 @@ window.AudioPreview = (function() {
   function setupEventListeners() {
     btnPlay.addEventListener('click', togglePlay);
 
-    volumeSlider.addEventListener('input', (e) => {
-      const vol = e.target.value / 100;
+    volumeSlider.addEventListener('input', function(e) {
+      var vol = e.target.value / 100;
       setVolume(vol);
     });
 
     volumeIcon.addEventListener('click', toggleMute);
 
-    // Click na waveform: pula pra essa posição
-    container.addEventListener('click', (e) => {
-      if (!audioElement.duration) return;
-      const rect = container.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const ratio = x / rect.width;
-      audioElement.currentTime = audioElement.duration * ratio;
+    container.addEventListener('click', function(e) {
+      seekFromMouse(e);
+    });
+
+    container.addEventListener('mousedown', function() {
+      container.dataset.dragging = '1';
+    });
+
+    document.addEventListener('mouseup', function() {
+      container.dataset.dragging = '0';
+    });
+
+    container.addEventListener('mousemove', function(e) {
+      if (container.dataset.dragging === '1') seekFromMouse(e);
+    });
+
+    window.addEventListener('resize', function() {
+      if (currentPeaks) redrawWaveform();
     });
   }
 
   function setupAudioElementEvents() {
-    audioElement.addEventListener('play',  () => { isPlaying = true;  btnPlay.textContent = '⏸'; });
-    audioElement.addEventListener('pause', () => { isPlaying = false; btnPlay.textContent = '▶'; });
-    audioElement.addEventListener('ended', () => {
-      isPlaying = false;
+    audioElement.addEventListener('play', function() {
+      btnPlay.textContent = '⏸';
+      playhead.classList.add('visible');
+    });
+
+    audioElement.addEventListener('pause', function() {
       btnPlay.textContent = '▶';
-      playhead.classList.remove('visible');
+    });
+
+    audioElement.addEventListener('ended', function() {
+      btnPlay.textContent = '▶';
+      audioElement.currentTime = 0;
+      updatePlayhead();
     });
 
     audioElement.addEventListener('timeupdate', updatePlayhead);
-    audioElement.addEventListener('loadedmetadata', () => {
-      updateTimeLabel();
+    audioElement.addEventListener('loadedmetadata', updateTimeLabel);
+    audioElement.addEventListener('error', function() {
+      loading.textContent = 'Não foi possível reproduzir este áudio no preview.';
+      loading.classList.remove('hidden');
     });
   }
 
-  /**
-   * Carrega um arquivo de áudio para o preview
-   */
   async function load(filePath) {
+    var token = ++loadToken;
     currentFilePath = filePath;
+    currentPeaks = null;
 
-    // Mostra o painel de preview
     previewPanel.classList.remove('hidden');
     nameLabel.textContent = filePath.split(/[\\/]/).pop();
+    loading.textContent = 'Carregando áudio...';
     loading.classList.remove('hidden');
     playhead.classList.remove('visible');
+    clearCanvas();
 
-    // Para o que estiver tocando
     audioElement.pause();
     audioElement.currentTime = 0;
-
-    // Define a fonte do <audio> via file:// URL
-    // Importante: caminhos do Windows precisam ser convertidos para URL
-    const fileUrl = filePathToUrl(filePath);
-    audioElement.src = fileUrl;
+    audioElement.src = filePathToUrl(filePath);
     audioElement.volume = isMuted ? 0 : lastVolume;
+    audioElement.load();
 
-    // Carrega e desenha a waveform em paralelo
+    // O áudio deve tocar mesmo se a waveform falhar.
     try {
-      await drawWaveform(filePath);
-      loading.classList.add('hidden');
+      await audioElement.play();
+    } catch (playErr) {
+      // Alguns ambientes bloqueiam autoplay; o botão Play continua funcionando.
+      console.warn('[AudioPreview] Autoplay bloqueado:', playErr);
+    }
 
-      // Auto-play ao selecionar
-      try {
-        await audioElement.play();
-      } catch (playErr) {
-        console.warn('[AudioPreview] Autoplay bloqueado:', playErr);
+    if (token !== loadToken) return;
+
+    try {
+      var stat = fs.statSync(filePath);
+      if (stat && stat.size > MAX_WAVEFORM_BYTES) {
+        loading.textContent = 'Arquivo grande: preview de áudio ativo, waveform desativada.';
+        drawPlaceholderWaveform();
+        return;
       }
+
+      await drawWaveform(filePath, token);
+      if (token !== loadToken) return;
+      loading.classList.add('hidden');
     } catch (err) {
-      console.error('[AudioPreview] Falha ao desenhar waveform:', err);
-      loading.textContent = 'Não foi possível carregar a waveform';
+      if (token !== loadToken) return;
+      console.warn('[AudioPreview] Falha ao desenhar waveform:', err);
+      loading.textContent = 'Preview de áudio ativo, mas a waveform não pôde ser gerada.';
+      drawPlaceholderWaveform();
     }
   }
 
-  /**
-   * Converte caminho de arquivo do sistema em URL file://
-   * Exemplo:
-   *   "G:\Audios\track.wav" → "file:///G:/Audios/track.wav"
-   */
   function filePathToUrl(filePath) {
-    // Normaliza barras
-    let normalized = filePath.replace(/\\/g, '/');
-    // Encode caracteres especiais (espaços, acentos, etc.)
-    const parts = normalized.split('/');
-    const encoded = parts.map(p => encodeURIComponent(p)).join('/');
-    return 'file:///' + encoded;
+    var normalized = String(filePath).replace(/\\/g, '/');
+
+    // Windows: G:/Pasta/arquivo.mp3 precisa manter o ':' do drive.
+    if (/^[a-zA-Z]:\//.test(normalized)) {
+      var drive = normalized.slice(0, 2);
+      var rest = normalized.slice(3).split('/').map(encodeURIComponent).join('/');
+      return 'file:///' + drive + '/' + rest;
+    }
+
+    // UNC: //server/share/file.wav
+    if (normalized.indexOf('//') === 0) {
+      return 'file:' + normalized.split('/').map(function(part, index) {
+        return index < 2 ? part : encodeURIComponent(part);
+      }).join('/');
+    }
+
+    if (normalized.charAt(0) === '/') {
+      return 'file://' + normalized.split('/').map(encodeURIComponent).join('/');
+    }
+
+    return 'file:///' + normalized.split('/').map(encodeURIComponent).join('/');
   }
 
-  /**
-   * Lê o arquivo de áudio do disco e desenha a waveform.
-   *
-   * Pipeline:
-   *   1. fs.readFileSync(filePath) → Buffer (Node)
-   *   2. Buffer → ArrayBuffer
-   *   3. ArrayBuffer → AudioBuffer (decodeAudioData)
-   *   4. Pega channelData do AudioBuffer (Float32Array com amostras)
-   *   5. Faz downsampling pros pixels do canvas
-   *   6. Desenha barras verticais
-   */
-  async function drawWaveform(filePath) {
+  async function drawWaveform(filePath, token) {
     if (!audioContext) {
       audioContext = new (window.AudioContext || window.webkitAudioContext)();
     }
 
-    // 1. Lê o arquivo do disco (Node fs)
-    const buffer = fs.readFileSync(filePath);
+    var buffer = fs.readFileSync(filePath);
+    if (token !== loadToken) return;
 
-    // 2. Buffer Node → ArrayBuffer (que a Web Audio API entende)
-    const arrayBuffer = buffer.buffer.slice(
-      buffer.byteOffset,
-      buffer.byteOffset + buffer.byteLength
-    );
+    var arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+    var audioBuffer = await decodeAudio(arrayBuffer);
+    if (token !== loadToken) return;
 
-    // 3. Decodifica para AudioBuffer
-    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-    currentBuffer = audioBuffer;
+    var channelData = audioBuffer.getChannelData(0);
+    var width = Math.max(1, container.clientWidth || 300);
+    var samplesPerPixel = Math.max(1, Math.floor(channelData.length / width));
+    var peaks = new Float32Array(width);
 
-    // 4. Pega as amostras do canal 0 (mono ou esquerdo)
-    const channelData = audioBuffer.getChannelData(0);
-
-    // Ajusta o canvas para a resolução real do dispositivo
-    const dpr = window.devicePixelRatio || 1;
-    const width = container.clientWidth;
-    const height = container.clientHeight;
-    canvas.width = width * dpr;
-    canvas.height = height * dpr;
-    canvas.style.width = width + 'px';
-    canvas.style.height = height + 'px';
-    ctx.scale(dpr, dpr);
-
-    // 5. Downsampling: agrupa N amostras por pixel
-    const samplesPerPixel = Math.floor(channelData.length / width);
-    const peaks = new Float32Array(width);
-    for (let x = 0; x < width; x++) {
-      let max = 0;
-      const start = x * samplesPerPixel;
-      const end   = start + samplesPerPixel;
-      for (let i = start; i < end; i++) {
-        const abs = Math.abs(channelData[i]);
+    for (var x = 0; x < width; x++) {
+      var max = 0;
+      var start = x * samplesPerPixel;
+      var end = Math.min(start + samplesPerPixel, channelData.length);
+      for (var i = start; i < end; i++) {
+        var abs = Math.abs(channelData[i]);
         if (abs > max) max = abs;
       }
       peaks[x] = max;
     }
 
-    // 6. Desenha
-    drawPeaks(peaks, width, height, 0);
+    currentPeaks = peaks;
+    redrawWaveform();
   }
 
-  /**
-   * Desenha as barras da waveform.
-   * playedRatio = 0..1 indica até onde já foi tocado (cor diferente)
-   */
+  function decodeAudio(arrayBuffer) {
+    return new Promise(function(resolve, reject) {
+      var done = false;
+      try {
+        var maybePromise = audioContext.decodeAudioData(arrayBuffer, function(buffer) {
+          if (!done) {
+            done = true;
+            resolve(buffer);
+          }
+        }, function(err) {
+          if (!done) {
+            done = true;
+            reject(err);
+          }
+        });
+
+        if (maybePromise && typeof maybePromise.then === 'function') {
+          maybePromise.then(function(buffer) {
+            if (!done) {
+              done = true;
+              resolve(buffer);
+            }
+          }).catch(function(err) {
+            if (!done) {
+              done = true;
+              reject(err);
+            }
+          });
+        }
+      } catch (e) {
+        reject(e);
+      }
+    });
+  }
+
+  function redrawWaveform() {
+    var width = Math.max(1, container.clientWidth || 300);
+    var height = Math.max(1, container.clientHeight || 60);
+    var dpr = window.devicePixelRatio || 1;
+
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    canvas.style.width = width + 'px';
+    canvas.style.height = height + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    if (!currentPeaks) {
+      drawPlaceholderWaveform();
+      return;
+    }
+
+    var ratio = audioElement && audioElement.duration ? audioElement.currentTime / audioElement.duration : 0;
+    drawPeaks(currentPeaks, width, height, ratio);
+  }
+
   function drawPeaks(peaks, width, height, playedRatio) {
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = COLOR_BG;
     ctx.fillRect(0, 0, width, height);
 
-    const middle = height / 2;
-    const playedX = width * playedRatio;
+    var middle = height / 2;
+    var playedX = width * playedRatio;
+    var step = peaks.length / width;
 
-    for (let x = 0; x < width; x++) {
-      const peak = peaks[x];
-      const barHeight = Math.max(1, peak * (height * 0.9));
+    for (var x = 0; x < width; x++) {
+      var peak = peaks[Math.min(peaks.length - 1, Math.floor(x * step))] || 0;
+      var barHeight = Math.max(1, peak * (height * 0.9));
       ctx.fillStyle = (x < playedX) ? COLOR_WAVE_PLAYED : COLOR_WAVE;
       ctx.fillRect(x, middle - barHeight / 2, 1, barHeight);
     }
   }
 
+  function drawPlaceholderWaveform() {
+    var width = Math.max(1, container.clientWidth || 300);
+    var height = Math.max(1, container.clientHeight || 60);
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    canvas.style.width = width + 'px';
+    canvas.style.height = height + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = COLOR_BG;
+    ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = COLOR_WAVE;
+    for (var x = 0; x < width; x += 8) {
+      var h = 8 + Math.abs(Math.sin(x * 0.05)) * (height * 0.55);
+      ctx.fillRect(x, (height - h) / 2, 2, h);
+    }
+  }
+
+  function clearCanvas() {
+    if (!ctx || !container) return;
+    var width = Math.max(1, container.clientWidth || 300);
+    var height = Math.max(1, container.clientHeight || 60);
+    ctx.clearRect(0, 0, width, height);
+  }
+
+  function seekFromMouse(e) {
+    if (!audioElement || !audioElement.duration) return;
+    var rect = container.getBoundingClientRect();
+    var ratio = (e.clientX - rect.left) / rect.width;
+    ratio = Math.max(0, Math.min(1, ratio));
+    audioElement.currentTime = audioElement.duration * ratio;
+    updatePlayhead();
+  }
+
   function togglePlay() {
-    if (!audioElement.src) return;
+    if (!audioElement || !audioElement.src) return;
     if (audioElement.paused) {
-      audioElement.play();
+      audioElement.play().catch(function(err) {
+        console.warn('[AudioPreview] play falhou:', err);
+      });
     } else {
       audioElement.pause();
     }
   }
 
   function setVolume(vol) {
-    lastVolume = vol;
-    audioElement.volume = isMuted ? 0 : vol;
-    volumeIcon.textContent = vol === 0 ? '🔇' : (vol < 0.5 ? '🔉' : '🔊');
+    lastVolume = Math.max(0, Math.min(1, vol));
+    if (lastVolume > 0) isMuted = false;
+    else isMuted = true;
+    audioElement.volume = isMuted ? 0 : lastVolume;
+    volumeIcon.textContent = isMuted || lastVolume === 0 ? '🔇' : (lastVolume < 0.5 ? '🔉' : '🔊');
   }
 
   function toggleMute() {
@@ -256,44 +343,51 @@ window.AudioPreview = (function() {
   }
 
   function updatePlayhead() {
-    if (!audioElement.duration) return;
-    const ratio = audioElement.currentTime / audioElement.duration;
-    const width = container.clientWidth;
+    if (!audioElement || !audioElement.duration) {
+      updateTimeLabel();
+      return;
+    }
+    var ratio = audioElement.currentTime / audioElement.duration;
+    var width = container.clientWidth || 1;
     playhead.style.left = (width * ratio) + 'px';
     playhead.classList.add('visible');
     updateTimeLabel();
+    if (currentPeaks) redrawWaveform();
   }
 
   function updateTimeLabel() {
-    const cur = formatTime(audioElement.currentTime || 0);
-    const dur = formatTime(audioElement.duration || 0);
+    if (!audioElement) return;
+    var cur = formatTime(audioElement.currentTime || 0);
+    var dur = formatTime(audioElement.duration || 0);
     timeLabel.textContent = cur + ' / ' + dur;
   }
 
   function formatTime(seconds) {
     if (!isFinite(seconds)) return '0:00';
-    const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
+    var m = Math.floor(seconds / 60);
+    var s = Math.floor(seconds % 60);
     return m + ':' + (s < 10 ? '0' + s : s);
   }
 
-  /**
-   * Esconde o painel de preview e para a reprodução
-   */
   function hide() {
-    audioElement.pause();
-    audioElement.src = '';
-    previewPanel.classList.add('hidden');
+    loadToken++;
+    if (audioElement) {
+      audioElement.pause();
+      audioElement.removeAttribute('src');
+      audioElement.load();
+    }
+    if (previewPanel) previewPanel.classList.add('hidden');
+    if (playhead) playhead.classList.remove('visible');
     currentFilePath = null;
+    currentPeaks = null;
   }
 
-  /**
-   * Para a reprodução sem esconder o painel
-   */
   function stop() {
+    if (!audioElement) return;
     audioElement.pause();
-    audioElement.currentTime = 0;
+    try { audioElement.currentTime = 0; } catch (e) {}
+    updatePlayhead();
   }
 
-  return { init, load, hide, stop, togglePlay };
+  return { init: init, load: load, hide: hide, stop: stop, togglePlay: togglePlay, filePathToUrl: filePathToUrl };
 })();

@@ -15,7 +15,7 @@
 
 'use strict';
 
-window.Storage = (function() {
+window.IronStorage = (function() {
 
   // Será preenchido quando o CEP estiver pronto
   let basePath = '';
@@ -23,14 +23,21 @@ window.Storage = (function() {
   let pathModule = null;
   let isReady = false;
 
+
+  function getNodeRequire() {
+    if (typeof require === 'function') return require;
+    if (window.cep_node && typeof window.cep_node.require === 'function') return window.cep_node.require;
+    throw new Error('Node.js não está habilitado no CEP. Confira --enable-nodejs e --mixed-context no manifest.xml.');
+  }
+
   /**
    * Inicializa o storage. Chame UMA VEZ no início (em main.js).
    * Precisa do CSInterface já instanciado.
    */
   function init(csInterface) {
     try {
-      fs = require('fs');
-      pathModule = require('path');
+      fs = getNodeRequire()('fs');
+      pathModule = getNodeRequire()('path');
       basePath = csInterface.getSystemPath(SystemPath.USER_DATA);
       isReady = true;
       console.log('[Storage] Inicializado em:', basePath);
