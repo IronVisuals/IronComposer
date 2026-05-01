@@ -29,13 +29,8 @@
           <MainPath>./index.html</MainPath>
           <ScriptPath>./jsx/host.jsx</ScriptPath>
           <CEFCommandLine>
-            <!-- Habilita o módulo fs do Node.js dentro do painel -->
             <Parameter>--enable-nodejs</Parameter>
-            <!-- Permite acesso a APIs Node.js + DOM no mesmo contexto -->
-            <Parameter>--mixed-context</Parameter>
-            <!-- Permite que o áudio toque sem interação prévia (preview automático) -->
             <Parameter>--autoplay-policy=no-user-gesture-required</Parameter>
-            <!-- Permite ler arquivos locais via file:// no Audio HTML5 -->
             <Parameter>--allow-file-access-from-files</Parameter>
             <Parameter>--disable-web-security</Parameter>
           </CEFCommandLine>

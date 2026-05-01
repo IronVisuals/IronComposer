@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\ironv\\\\Desktop\\\\Projetos_Pessoais\\\\IronComposer\" -Recurse | Select-Object FullName | ForEach-Object { $_.FullName } | Sort-Object)"
+    ]
+  }
+}

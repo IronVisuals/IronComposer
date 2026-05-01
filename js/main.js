@@ -9,6 +9,14 @@
 
 'use strict';
 
+// Compatibilidade com --enable-nodejs sem --mixed-context:
+// No CEF moderno (Premiere 2025+), Node.js fica em cep_node.require(), não no global.
+function _req(mod) {
+  if (typeof cep_node !== 'undefined') return cep_node.require(mod);
+  if (typeof require !== 'undefined') return require(mod);
+  throw new Error('Node.js indisponível (cep_node e require ausentes)');
+}
+
 // =====================================================================
 // MÓDULO: STORAGE (persistência em JSON no disco)
 // =====================================================================
@@ -17,8 +25,8 @@ const Storage = (() => {
 
   function init(cs) {
     try {
-      _fs   = require('fs');
-      _path = require('path');
+      _fs   = _req('fs');
+      _path = _req('path');
       _base = cs.getSystemPath(SystemPath.USER_DATA);
       console.log('[Storage] base:', _base);
     } catch(e) { console.error('[Storage] init falhou:', e); }
@@ -60,7 +68,7 @@ const Favorites = (() => {
     return _set.has(p);
   }
   function list() {
-    const _fs = require('fs');
+    const _fs = _req('fs');
     const arr = Array.from(_set).filter(p => { try { return _fs.existsSync(p); } catch(e) { return false; } });
     if (arr.length !== _set.size) { _set = new Set(arr); Storage.set('favorites', arr); }
     return arr;
@@ -83,7 +91,7 @@ const AudioPreview = (() => {
   let toastTimeout = null;
 
   function init() {
-    _fs = require('fs');
+    _fs = _req('fs');
     previewPanel = document.getElementById('audio-preview');
     container    = document.getElementById('waveform-container');
     canvas       = document.getElementById('waveform-canvas');
@@ -241,8 +249,8 @@ window.addEventListener('DOMContentLoaded', () => {
 
   try {
     csInterface = new CSInterface();
-    fs   = require('fs');
-    pathM = require('path');
+    fs   = _req('fs');
+    pathM = _req('path');
   } catch(e) {
     _showError('Falha ao inicializar dependências: ' + e.message);
     return;

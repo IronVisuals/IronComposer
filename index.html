@@ -177,15 +177,14 @@ body{font-family:var(--fn);font-size:12px;background:var(--bg0);color:var(--t1);
     1. CSInterface.js  (biblioteca da Adobe)
     2. main.js         (contém TUDO do IronComposer)
   -->
-  <script src="./lib/CSInterface.js"></script>
   <script>
-    // Captura erros de carregamento antes do main.js
     window.addEventListener('error', function(e) {
       document.getElementById('app').style.display = 'none';
       document.getElementById('error-screen').style.display = 'block';
       document.getElementById('error-msg').textContent = e.message + ' (arquivo: ' + e.filename + ', linha: ' + e.lineno + ')';
     });
   </script>
+  <script src="./lib/CSInterface.js"></script>
   <script src="./js/main.js"></script>
 
 </body>
