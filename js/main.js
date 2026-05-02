@@ -19,6 +19,14 @@ let currentTab = 'browse';
 let expandedFolders = new Set();
 let currentFolderPath = null;
 let currentFolderRecursive = false;
+let renderListToken = 0;
+
+const SEARCH_INDEX_MAX_DEPTH = 20;
+const SEARCH_INDEX_ITEMS_PER_SLICE = 300;
+const SEARCH_INDEX_SLICE_MS = 14;
+const FILE_RENDER_BATCH_SIZE = 120;
+
+let searchIndex = createEmptySearchIndex();
 
 const EXT_VIDEO  = new Set(['.mp4', '.mov', '.avi', '.mkv', '.mxf', '.r3d', '.webm', '.m4v', '.mpg', '.mpeg', '.mts', '.m2ts']);
 const EXT_AUDIO  = new Set(['.wav', '.mp3', '.aac', '.aif', '.aiff', '.flac', '.ogg', '.m4a', '.wma']);
@@ -85,6 +93,7 @@ window.addEventListener('DOMContentLoaded', () => {
     loadHostScript();
 
     setStatus(`Pronto. ${myFolders.length} pasta(s) carregada(s).`);
+    scheduleSearchIndexRebuild();
   } catch (err) {
     showStartupError(err);
   }
@@ -93,7 +102,7 @@ window.addEventListener('DOMContentLoaded', () => {
 function setupEventListeners() {
   btnAddFolder.addEventListener('click', addFolderDialog);
   btnInsert.addEventListener('click', insertIntoTimeline);
-  searchInput.addEventListener('input', debounce(handleSearch, 150));
+  searchInput.addEventListener('input', handleSearch);
   searchClear.addEventListener('click', clearSearch);
 
   document.querySelectorAll('.tab').forEach(tab => {
@@ -233,6 +242,7 @@ function addFolder(folderPath) {
   expandedFolders.add(folderPath);
   IronStorage.set('expandedFolders', [...expandedFolders]);
   renderSidebar();
+  scheduleSearchIndexRebuild();
   loadFiles(folderPath, true);
   showToast(`Pasta adicionada: ${pathModule.basename(folderPath)}`, 'success');
 }
@@ -242,6 +252,7 @@ function removeFolder(folderPath) {
   IronStorage.set('folders', myFolders);
   expandedFolders = new Set([...expandedFolders].filter(p => !isPathInsideOrSame(p, folderPath)));
   IronStorage.set('expandedFolders', [...expandedFolders]);
+  scheduleSearchIndexRebuild();
   if (currentFolderPath && isPathInsideOrSame(currentFolderPath, folderPath)) {
     currentFolderPath = null;
     currentFiles = [];
@@ -249,7 +260,7 @@ function removeFolder(folderPath) {
     selectedFile = null;
     btnInsert.disabled = true;
     hideAllPreviews();
-    fileList.innerHTML = '<p class="placeholder-text">Selecione uma pasta na barra lateral.</p>';
+    setFileListPlaceholder('<p class="placeholder-text">Selecione uma pasta na barra lateral.</p>');
   }
   renderSidebar();
   showToast('Pasta removida do IronComposer. Nada foi apagado do disco.', 'success');
@@ -281,7 +292,7 @@ function getFilesInFolder(dirPath) {
   }
 }
 
-function getFilesRecursive(dirPath, depth = 0, maxDepth = 12, accumulator = []) {
+function getFilesRecursive(dirPath, depth = 0, maxDepth = SEARCH_INDEX_MAX_DEPTH, accumulator = []) {
   if (depth > maxDepth) return accumulator;
 
   let entries;
@@ -323,6 +334,296 @@ function fileEntryFromPath(fullPath) {
     modified = stat.mtime ? stat.mtime.getTime() : 0;
   } catch (e) {}
   return { name, fullPath, ext, size, dir, modified };
+}
+
+function createEmptySearchIndex() {
+  return {
+    filesByKey: new Map(),
+    entries: [],
+    rootSignature: '',
+    ready: false,
+    isBuilding: false,
+    buildToken: 0,
+    indexedFiles: 0,
+    indexedDirs: 0,
+    errors: 0,
+    lastStatusAt: 0,
+    lastSearchRefreshAt: 0
+  };
+}
+
+function scheduleSearchIndexRebuild() {
+  if (!fs || !pathModule) return;
+
+  const roots = myFolders.slice();
+  const signature = getSearchRootSignature(roots);
+  if (searchIndex.rootSignature === signature && (searchIndex.ready || searchIndex.isBuilding)) return;
+
+  const token = ++searchIndex.buildToken;
+  searchIndex.rootSignature = signature;
+  searchIndex.ready = roots.length === 0;
+  searchIndex.isBuilding = roots.length > 0;
+  setTimeout(() => rebuildSearchIndex(token, roots, signature), 0);
+}
+
+function rebuildSearchIndex(token, roots, signature) {
+  if (!fs || !pathModule || token !== searchIndex.buildToken) return;
+
+  searchIndex = createEmptySearchIndex();
+  searchIndex.buildToken = token;
+  searchIndex.rootSignature = signature;
+  searchIndex.ready = roots.length === 0;
+  searchIndex.isBuilding = roots.length > 0;
+
+  if (roots.length === 0) return;
+
+  const queue = roots.map(root => ({
+    rootPath: root,
+    dirPath: root,
+    depth: 0,
+    entries: null,
+    index: 0
+  }));
+  const visitedDirs = new Set();
+
+  updateSearchIndexStatus(true);
+  processSearchIndexQueue(token, queue, visitedDirs);
+}
+
+function processSearchIndexQueue(token, queue, visitedDirs) {
+  if (token !== searchIndex.buildToken) return;
+
+  const started = Date.now();
+  let processed = 0;
+
+  while (
+    queue.length > 0 &&
+    processed < SEARCH_INDEX_ITEMS_PER_SLICE &&
+    (Date.now() - started) < SEARCH_INDEX_SLICE_MS
+  ) {
+    const task = queue[0];
+
+    if (!task.entries) {
+      const dirKey = normalizeComparePath(task.dirPath);
+      if (visitedDirs.has(dirKey) || task.depth > SEARCH_INDEX_MAX_DEPTH) {
+        queue.shift();
+        continue;
+      }
+
+      visitedDirs.add(dirKey);
+      try {
+        task.entries = fs.readdirSync(task.dirPath, { withFileTypes: true });
+        task.index = 0;
+        searchIndex.indexedDirs += 1;
+      } catch (e) {
+        searchIndex.errors += 1;
+        console.warn('[IronComposer] Erro ao indexar pasta:', task.dirPath, e);
+        queue.shift();
+        continue;
+      }
+    }
+
+    if (task.index >= task.entries.length) {
+      queue.shift();
+      continue;
+    }
+
+    const entry = task.entries[task.index++];
+    processed += 1;
+    if (shouldSkipName(entry.name) || (entry.isSymbolicLink && entry.isSymbolicLink())) continue;
+
+    const fullPath = pathModule.join(task.dirPath, entry.name);
+    try {
+      if (entry.isDirectory()) {
+        queue.push({
+          rootPath: task.rootPath,
+          dirPath: fullPath,
+          depth: task.depth + 1,
+          entries: null,
+          index: 0
+        });
+      } else if (entry.isFile()) {
+        const ext = pathModule.extname(entry.name).toLowerCase();
+        if (SUPPORTED.has(ext)) addFileToSearchIndex(fullPath, task.rootPath);
+      }
+    } catch (e) {
+      searchIndex.errors += 1;
+      console.warn('[IronComposer] Ignorando item inacessivel no indice:', fullPath, e);
+    }
+  }
+
+  refreshActiveSearchDuringIndex(false);
+  updateSearchIndexStatus(false);
+
+  if (queue.length > 0) {
+    setTimeout(() => processSearchIndexQueue(token, queue, visitedDirs), 0);
+    return;
+  }
+
+  finishSearchIndexBuild(token);
+}
+
+function finishSearchIndexBuild(token) {
+  if (token !== searchIndex.buildToken) return;
+
+  searchIndex.entries.sort((a, b) => sortFilesNatural(a.file, b.file));
+  searchIndex.ready = true;
+  searchIndex.isBuilding = false;
+
+  refreshActiveSearchDuringIndex(true);
+
+  if (!getActiveSearchRaw()) {
+    const suffix = searchIndex.errors ? ` (${searchIndex.errors} pasta(s) ignorada(s))` : '';
+    setStatus(`Busca indexada: ${searchIndex.entries.length} arquivo(s)${suffix}.`);
+  }
+}
+
+function addFileToSearchIndex(fullPath, rootPath) {
+  const file = fileEntryFromPath(fullPath);
+  const key = normalizeComparePath(file.fullPath);
+  if (searchIndex.filesByKey.has(key)) return;
+
+  searchIndex.filesByKey.set(key, file);
+  searchIndex.entries.push({
+    file,
+    searchText: buildFileSearchText(file, rootPath)
+  });
+  searchIndex.indexedFiles += 1;
+}
+
+function mergeFilesIntoSearchIndex(files) {
+  if (!files || !files.length || !pathModule) return;
+
+  const signature = getSearchRootSignature(myFolders);
+  if (searchIndex.rootSignature !== signature) return;
+
+  let added = false;
+  files.forEach(file => {
+    const key = normalizeComparePath(file.fullPath);
+    if (searchIndex.filesByKey.has(key)) return;
+
+    searchIndex.filesByKey.set(key, file);
+    searchIndex.entries.push({
+      file,
+      searchText: buildFileSearchText(file, getSearchRootForPath(file.fullPath))
+    });
+    searchIndex.indexedFiles += 1;
+    added = true;
+  });
+
+  if (added && searchIndex.ready) searchIndex.entries.sort((a, b) => sortFilesNatural(a.file, b.file));
+}
+
+function buildFileSearchText(file, rootPath) {
+  const rootName = rootPath ? pathModule.basename(rootPath) : '';
+  const relativeFile = rootPath ? pathModule.relative(rootPath, file.fullPath) : file.fullPath;
+  const parentName = file.dir ? pathModule.basename(file.dir) : '';
+  const raw = [
+    file.name,
+    file.ext,
+    rootName,
+    parentName,
+    relativeFile,
+    file.fullPath
+  ].join(' ');
+  const normalized = normalizeSearchText(raw);
+  return normalized + ' ' + normalized.replace(/[_\-./\\]+/g, ' ');
+}
+
+function searchIndexedFiles(query) {
+  ensureSearchIndex();
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedQuery) return [];
+
+  const results = [];
+  for (let i = 0; i < searchIndex.entries.length; i++) {
+    const entry = searchIndex.entries[i];
+    if (entry.searchText.indexOf(normalizedQuery) !== -1) results.push(entry.file);
+  }
+  return results;
+}
+
+function getIndexedFilesForFolder(folderPath, recursive) {
+  if (!searchIndex.ready || searchIndex.rootSignature !== getSearchRootSignature(myFolders)) return null;
+
+  const results = [];
+  for (let i = 0; i < searchIndex.entries.length; i++) {
+    const file = searchIndex.entries[i].file;
+    const matchesFolder = recursive ? isPathInsideOrSame(file.fullPath, folderPath) : samePath(file.dir, folderPath);
+    if (matchesFolder) results.push(file);
+  }
+  return results;
+}
+
+function searchFavoriteFiles(query) {
+  const normalizedQuery = normalizeSearchText(query);
+  return Favorites.list(true)
+    .filter(p => {
+      try { return fs.existsSync(p) && fs.statSync(p).isFile(); } catch (e) { return false; }
+    })
+    .map(p => fileEntryFromPath(p))
+    .filter(file => buildFileSearchText(file, getSearchRootForPath(file.fullPath)).indexOf(normalizedQuery) !== -1)
+    .sort(sortFilesNatural);
+}
+
+function ensureSearchIndex() {
+  if (!fs || !pathModule) return;
+  const signature = getSearchRootSignature(myFolders);
+  if (searchIndex.rootSignature === signature && (searchIndex.ready || searchIndex.isBuilding)) return;
+  scheduleSearchIndexRebuild();
+}
+
+function getSearchRootSignature(roots) {
+  return roots.map(normalizeComparePath).sort().join('|');
+}
+
+function getSearchRootForPath(fullPath) {
+  for (const folder of myFolders) {
+    if (isPathInsideOrSame(fullPath, folder)) return folder;
+  }
+  return '';
+}
+
+function getActiveSearchRaw() {
+  return searchInput ? searchInput.value.trim() : '';
+}
+
+function refreshActiveSearchDuringIndex(force) {
+  const raw = getActiveSearchRaw();
+  if (!raw || currentTab === 'favorites') return;
+
+  const now = Date.now();
+  if (!force && now - searchIndex.lastSearchRefreshAt < 350) return;
+  searchIndex.lastSearchRefreshAt = now;
+
+  renderSearchResults(raw);
+}
+
+function updateSearchIndexStatus(force) {
+  const now = Date.now();
+  if (!force && now - searchIndex.lastStatusAt < 700) return;
+  searchIndex.lastStatusAt = now;
+
+  const raw = getActiveSearchRaw();
+  if (raw) {
+    if (force) setStatus(`Indexando busca para "${raw}"...`);
+    return;
+  }
+
+  if (force) setStatus('Indexando busca em background...');
+}
+
+function normalizeSearchText(value) {
+  let text = String(value || '').toLowerCase().replace(/\\/g, '/');
+  try {
+    text = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  } catch (e) {}
+  return text;
+}
+
+function scheduleUiWork(fn) {
+  if (window.requestAnimationFrame) window.requestAnimationFrame(fn);
+  else setTimeout(fn, 0);
 }
 
 function renderSidebar() {
@@ -429,17 +730,25 @@ function loadFiles(folderPath, recursive = false) {
   selectedFile = null;
   btnInsert.disabled = true;
   hideAllPreviews();
-  fileList.innerHTML = '<p class="placeholder-text">Lendo arquivos...</p>';
+  setFileListPlaceholder('<p class="placeholder-text">Lendo arquivos...</p>');
 
   setTimeout(() => {
-    const files = recursive ? getFilesRecursive(folderPath) : getFilesInFolder(folderPath);
+    const indexedFiles = getIndexedFilesForFolder(folderPath, recursive);
+    const files = indexedFiles || (recursive ? getFilesRecursive(folderPath) : getFilesInFolder(folderPath));
     currentFiles = files;
+    if (!indexedFiles) mergeFilesIntoSearchIndex(files);
     renderFileList(files);
     setStatus(`${files.length} arquivo(s) em "${pathModule.basename(folderPath)}".`);
   }, 10);
 }
 
+function setFileListPlaceholder(html) {
+  renderListToken += 1;
+  fileList.innerHTML = html;
+}
+
 function renderFileList(files) {
+  const token = ++renderListToken;
   fileList.innerHTML = '';
 
   if (!files || files.length === 0) {
@@ -447,7 +756,22 @@ function renderFileList(files) {
     return;
   }
 
-  files.forEach(file => fileList.appendChild(createFileListItem(file)));
+  let index = 0;
+
+  function appendBatch() {
+    if (token !== renderListToken) return;
+
+    const fragment = document.createDocumentFragment();
+    const end = Math.min(index + FILE_RENDER_BATCH_SIZE, files.length);
+    for (; index < end; index++) {
+      fragment.appendChild(createFileListItem(files[index]));
+    }
+    fileList.appendChild(fragment);
+
+    if (index < files.length) scheduleUiWork(appendBatch);
+  }
+
+  appendBatch();
 }
 
 function createFileListItem(file) {
@@ -574,13 +898,19 @@ function switchTab(tabName) {
   hideAllPreviews();
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tabName));
 
+  if (getActiveSearchRaw()) {
+    renderSidebar();
+    renderSearchResults(getActiveSearchRaw());
+    return;
+  }
+
   if (tabName === 'favorites') {
     renderSidebar();
     renderFavoritesList();
   } else {
     renderSidebar();
     if (currentFolderPath) loadFiles(currentFolderPath, currentFolderRecursive);
-    else fileList.innerHTML = '<p class="placeholder-text">Selecione uma pasta na barra lateral.</p>';
+    else setFileListPlaceholder('<p class="placeholder-text">Selecione uma pasta na barra lateral.</p>');
   }
 }
 
@@ -596,7 +926,7 @@ function renderFavoritesList() {
   currentFiles = files;
 
   if (files.length === 0) {
-    fileList.innerHTML = '<p class="placeholder-text">Nenhum favorito ainda.<br>Clique na ☆ ao lado de um arquivo para favoritar.</p>';
+    setFileListPlaceholder('<p class="placeholder-text">Nenhum favorito ainda.<br>Clique na ☆ ao lado de um arquivo para favoritar.</p>');
     setStatus('0 favoritos.');
     return;
   }
@@ -606,7 +936,7 @@ function renderFavoritesList() {
 }
 
 function handleSearch() {
-  const query = searchInput.value.toLowerCase().trim();
+  const query = getActiveSearchRaw();
   searchClear.classList.toggle('visible', query.length > 0);
   selectedFilePath = null;
   selectedFile = null;
@@ -616,38 +946,25 @@ function handleSearch() {
   if (!query) {
     if (currentTab === 'favorites') renderFavoritesList();
     else if (currentFolderPath) loadFiles(currentFolderPath, currentFolderRecursive);
-    else fileList.innerHTML = '<p class="placeholder-text">Selecione uma pasta na barra lateral.</p>';
+    else setFileListPlaceholder('<p class="placeholder-text">Selecione uma pasta na barra lateral.</p>');
     return;
   }
 
-  if (query.length < 2) {
-    fileList.innerHTML = '<p class="placeholder-text">Digite pelo menos 2 caracteres para buscar.</p>';
-    return;
-  }
+  renderSearchResults(query);
+}
 
-  fileList.innerHTML = '<p class="placeholder-text">Buscando...</p>';
-  setTimeout(() => {
-    let searchPool = [];
+function renderSearchResults(query) {
+  selectedFilePath = null;
+  selectedFile = null;
+  btnInsert.disabled = true;
+  hideAllPreviews();
 
-    if (currentTab === 'favorites') {
-      searchPool = Favorites.list(true).map(p => fileEntryFromPath(p));
-    } else {
-      myFolders.forEach(folder => {
-        searchPool = searchPool.concat(getFilesRecursive(folder));
-      });
-    }
+  const results = currentTab === 'favorites' ? searchFavoriteFiles(query) : searchIndexedFiles(query);
+  currentFiles = results;
+  renderFileList(results);
 
-    const results = uniqueFiles(searchPool)
-      .filter(f => {
-        const rel = getRelativeLibraryPath(f.fullPath).toLowerCase();
-        return f.name.toLowerCase().includes(query) || rel.includes(query) || f.ext.toLowerCase().includes(query);
-      })
-      .sort(sortFilesNatural);
-
-    currentFiles = results;
-    renderFileList(results);
-    setStatus(`${results.length} resultado(s) para "${query}".`);
-  }, 10);
+  const suffix = currentTab !== 'favorites' && searchIndex.isBuilding ? ' (indexando...)' : '';
+  setStatus(`${results.length} resultado(s) para "${query}".${suffix}`);
 }
 
 function clearSearch() {
@@ -655,7 +972,7 @@ function clearSearch() {
   searchClear.classList.remove('visible');
   if (currentTab === 'favorites') renderFavoritesList();
   else if (currentFolderPath) loadFiles(currentFolderPath, currentFolderRecursive);
-  else fileList.innerHTML = '<p class="placeholder-text">Selecione uma pasta na barra lateral.</p>';
+  else setFileListPlaceholder('<p class="placeholder-text">Selecione uma pasta na barra lateral.</p>');
 }
 
 function insertIntoTimeline() {
