@@ -82,6 +82,7 @@ window.addEventListener('DOMContentLoaded', () => {
     IronStorage.init(csInterface);
     Favorites.init();
     AudioPreview.init();
+    if (window.MediaThumbs) MediaThumbs.init();
 
     myFolders = sanitizeSavedFolders(IronStorage.get('folders', []));
     expandedFolders = new Set(IronStorage.get('expandedFolders', []));
@@ -744,11 +745,13 @@ function loadFiles(folderPath, recursive = false) {
 
 function setFileListPlaceholder(html) {
   renderListToken += 1;
+  if (window.MediaThumbs) MediaThumbs.reset();
   fileList.innerHTML = html;
 }
 
 function renderFileList(files) {
   const token = ++renderListToken;
+  if (window.MediaThumbs) MediaThumbs.reset();
   fileList.innerHTML = '';
 
   if (!files || files.length === 0) {
@@ -776,9 +779,35 @@ function renderFileList(files) {
 
 function createFileListItem(file) {
   const item = document.createElement('div');
-  item.className = 'file-item';
+  const typeInfo = getFileTypeInfo(file.ext);
+  const previewKind = getFilePreviewKind(file.ext);
+  item.className = `file-item file-kind-${previewKind}`;
   item.dataset.path = file.fullPath;
   item.title = file.fullPath;
+
+  const preview = document.createElement('div');
+  preview.className = 'file-preview';
+
+  const previewCanvas = document.createElement('canvas');
+  previewCanvas.className = 'file-preview-canvas';
+  preview.appendChild(previewCanvas);
+
+  if (previewKind === 'image') {
+    const image = document.createElement('img');
+    image.className = 'file-preview-image';
+    image.alt = file.name;
+    preview.appendChild(image);
+  }
+
+  if (previewKind === 'video') {
+    const video = document.createElement('video');
+    video.className = 'file-preview-video';
+    video.muted = true;
+    video.loop = true;
+    video.preload = 'none';
+    video.setAttribute('playsinline', '');
+    preview.appendChild(video);
+  }
 
   const star = document.createElement('span');
   const isFav = Favorites.isFavorite(file.fullPath);
@@ -794,27 +823,35 @@ function createFileListItem(file) {
     if (currentTab === 'favorites') renderFavoritesList();
   });
 
-  const typeInfo = getFileTypeInfo(file.ext);
-  const icon = document.createElement('div');
-  icon.className = `file-icon ${typeInfo.cls}`;
-  icon.textContent = typeInfo.icon;
+  const badge = document.createElement('span');
+  badge.className = `file-preview-badge ${typeInfo.cls}`;
+  badge.textContent = typeInfo.icon;
+
+  preview.appendChild(star);
+  preview.appendChild(badge);
 
   const info = document.createElement('div');
   info.className = 'file-info';
   const relativeDir = getRelativeLibraryPath(file.fullPath);
   info.innerHTML = `
     <div class="file-name" title="${escapeHtml(file.fullPath)}">${escapeHtml(file.name)}</div>
-    <div class="file-meta">${file.ext.toUpperCase().slice(1)} · ${formatBytes(file.size)}${relativeDir ? ' · ' + escapeHtml(relativeDir) : ''}</div>
+    <div class="file-meta">${typeInfo.label} · ${formatBytes(file.size)}${relativeDir ? ' · ' + escapeHtml(relativeDir) : ''}</div>
   `;
 
-  item.appendChild(star);
-  item.appendChild(icon);
+  item.appendChild(preview);
   item.appendChild(info);
 
   item.addEventListener('click', () => selectFile(item, file));
   item.addEventListener('dblclick', () => {
     selectFile(item, file);
     insertIntoTimeline();
+  });
+
+  const itemToken = renderListToken;
+  scheduleUiWork(() => {
+    if (itemToken === renderListToken && item.isConnected && window.MediaThumbs) {
+      MediaThumbs.observe(item, file);
+    }
   });
 
   return item;
@@ -1025,6 +1062,14 @@ function getFileTypeInfo(ext) {
   if (EXT_MOGRT.has(ext))  return { icon: '✦',  cls: 'icon-mogrt', label: 'MOGRT' };
   if (EXT_IMAGE.has(ext))  return { icon: '🖼', cls: 'icon-image', label: 'Imagem' };
   return { icon: '📄', cls: '', label: 'Arquivo' };
+}
+
+function getFilePreviewKind(ext) {
+  if (EXT_AUDIO.has(ext)) return 'audio';
+  if (EXT_VIDEO.has(ext)) return 'video';
+  if (EXT_IMAGE.has(ext)) return 'image';
+  if (EXT_MOGRT.has(ext)) return 'mogrt';
+  return 'generic';
 }
 
 function formatBytes(bytes) {

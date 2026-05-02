@@ -381,41 +381,123 @@ body {
 }
 
 #file-list {
-  padding: 2px 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(142px, 1fr));
+  gap: 8px;
+  align-content: start;
+  padding: 8px;
 }
 
 .file-item {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  min-width: 0;
+  padding: 0;
   cursor: pointer;
-  border-bottom: 1px solid transparent;
-  transition: background 0.05s;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  background: #181818;
+  transition: background 0.05s, border-color 0.1s;
   position: relative;
+  overflow: hidden;
 }
 
 .file-item:hover {
   background: var(--bg-hover);
+  border-color: var(--border-color);
 }
 
 .file-item.selected {
   background: var(--bg-selected-soft);
-  border-left: 2px solid var(--accent);
+  border-color: var(--accent);
+}
+
+.file-preview {
+  position: relative;
+  width: 100%;
+  height: 78px;
+  background: #101010;
+  border-bottom: 1px solid var(--border-light);
+  overflow: hidden;
+}
+
+.file-preview-canvas,
+.file-preview-image,
+.file-preview-video {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.file-preview-image,
+.file-preview-video {
+  position: absolute;
+  inset: 0;
+  object-fit: cover;
+}
+
+.file-preview-image {
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.file-kind-image.thumb-ready .file-preview-image {
+  opacity: 1;
+}
+
+.file-preview-video {
+  opacity: 0;
+  pointer-events: none;
+  background: #000;
+  transition: opacity 0.1s;
+}
+
+.file-kind-video.video-previewing .file-preview-video {
+  opacity: 1;
+}
+
+.file-preview-badge {
+  position: absolute;
+  left: 5px;
+  bottom: 5px;
+  z-index: 3;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(16,16,16,0.78);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 2px;
+  font-size: 10px;
+  line-height: 1;
 }
 
 .file-favorite {
-  width: 14px;
-  text-align: center;
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 4;
+  width: 19px;
+  height: 19px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(16,16,16,0.72);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 2px;
   font-size: 11px;
   cursor: pointer;
   color: var(--text-muted);
-  flex-shrink: 0;
-  transition: color 0.15s, transform 0.15s;
+  transition: color 0.15s, transform 0.15s, background 0.15s;
 }
 
 .file-favorite:hover {
   transform: scale(1.2);
+  background: rgba(16,16,16,0.92);
 }
 
 .file-favorite.active {
@@ -430,9 +512,10 @@ body {
 }
 
 .file-info {
-  flex: 1;
+  flex: 0 0 auto;
   overflow: hidden;
   min-width: 0;
+  padding: 6px 7px 7px;
 }
 
 .file-name {
@@ -630,6 +713,10 @@ body {
   padding: 30px 16px;
   font-style: italic;
   line-height: 1.5;
+}
+
+#file-list > .placeholder-text {
+  grid-column: 1 / -1;
 }
 
 /* ============== FOOTER ============== */
